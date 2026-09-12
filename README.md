@@ -40,3 +40,7 @@ dsh plugin --profile web add link:/home/yoggu/Projects/dsh-plugins/dsh-git-graph
 
 Then restart the web service and refresh the page. In the right Sidebar, open the
 guide and pick **Git graph**.
+
+## Layout notes
+
+The lane layout is a pure function of the commit page.
