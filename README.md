@@ -44,3 +44,7 @@ guide and pick **Git graph**.
 ## Layout notes
 
 The lane layout is a pure function of the commit page.
+
+### Comparison modes
+
+Two arbitrary commits, or HEAD against the working tree.
