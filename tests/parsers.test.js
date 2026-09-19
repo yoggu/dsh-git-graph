@@ -12,7 +12,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, mkdirSync, renameSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -55,6 +55,107 @@ test('parseNameStatus reads a rename as two paths, not two entries', () => {
   assert.equal(parsed[0].status, 'R')
   assert.equal(parsed[0].oldPath, 'old.txt')
   assert.equal(parsed[0].path, 'new.txt')
+})
+
+test('parseNumstat handles regular, binary, and rename records with newline paths', () => {
+  const parsed = internals.parseNumstat([
+    '3\t1\tspace name.txt',
+    '-\t-\tbinary.bin',
+    '2\t4\t', 'old\nname.txt', 'new\nname.txt',
+  ].join('\u0000') + '\u0000')
+  assert.deepEqual(parsed, [
+    { path: 'space name.txt', oldPath: null, additions: 3, deletions: 1 },
+    { path: 'binary.bin', oldPath: null, additions: null, deletions: null },
+    { path: 'new\nname.txt', oldPath: 'old\nname.txt', additions: 2, deletions: 4 },
+  ])
+})
+
+test('parseStatusV2 keeps type-2 rename old and new paths separate', () => {
+  const parsed = internals.parseStatusV2([
+    '2 R. N... 100644 100644 100644 abcdef abcdef R100 new\nname.txt',
+    'old\nname.txt',
+  ].join('\u0000') + '\u0000')
+  assert.deepEqual(parsed.staged, [{ status: 'R', path: 'new\nname.txt', oldPath: 'old\nname.txt' }])
+  assert.deepEqual(parsed.unstaged, [])
+})
+
+test('commitDetail returns addition and deletion counts for text and binary files', async () => {
+  const dir = repo({ 'modified.txt': 'one\ntwo\n', 'deleted.txt': 'gone\n', 'binary.bin': Buffer.from([0, 1, 2]) })
+  const run = (...args) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' })
+  writeFileSync(join(dir, 'modified.txt'), 'one\nTWO\nthree\n')
+  run('rm', '-q', 'deleted.txt')
+  writeFileSync(join(dir, 'added.txt'), 'new\nfile\n')
+  writeFileSync(join(dir, 'binary.bin'), Buffer.from([0, 1, 3]))
+  run('add', '-A')
+  run('commit', '-qm', 'counts')
+  const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).trim()
+  const files = (await internals.commitDetail(dir, head)).files
+  const byPath = new Map(files.map(file => [file.path, file]))
+  assert.deepEqual(byPath.get('modified.txt'), { status: 'M', path: 'modified.txt', oldPath: null, score: '', additions: 2, deletions: 1 })
+  assert.deepEqual(byPath.get('added.txt'), { status: 'A', path: 'added.txt', oldPath: null, score: '', additions: 2, deletions: 0 })
+  assert.deepEqual(byPath.get('deleted.txt'), { status: 'D', path: 'deleted.txt', oldPath: null, score: '', additions: 0, deletions: 1 })
+  assert.equal(byPath.get('binary.bin').additions, null)
+  assert.equal(byPath.get('binary.bin').deletions, null)
+})
+
+test('commitDetail preserves renamed paths and their numstat counts', async () => {
+  const lines = Array.from({ length: 10 }, (_, index) => `line ${index + 1}`).join('\n') + '\n'
+  const dir = repo({ 'old name\n.txt': lines })
+  const run = (...args) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' })
+  renameSync(join(dir, 'old name\n.txt'), join(dir, 'new name\n.txt'))
+  writeFileSync(join(dir, 'new name\n.txt'), lines.replace('line 2', 'LINE TWO') + 'line 11\n')
+  run('add', '-A')
+  run('commit', '-qm', 'rename with counts')
+  const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).trim()
+  const [file] = (await internals.commitDetail(dir, head)).files
+  assert.deepEqual(file, {
+    status: 'R', path: 'new name\n.txt', oldPath: 'old name\n.txt', score: '079', additions: 2, deletions: 1,
+  })
+})
+
+test('workingTree preserves staged rename paths and counts', async () => {
+  const dir = repo({ 'old name\n.txt': 'one\ntwo\nthree\nfour\n' })
+  const run = (...args) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' })
+  renameSync(join(dir, 'old name\n.txt'), join(dir, 'new name\n.txt'))
+  writeFileSync(join(dir, 'new name\n.txt'), 'one\nTWO\nthree\nfour\nfive\n')
+  run('add', '-A')
+  const result = await internals.workingTree(dir)
+  assert.deepEqual(result.staged, [{
+    status: 'R', path: 'new name\n.txt', oldPath: 'old name\n.txt', additions: 2, deletions: 1,
+  }])
+})
+
+test('workingTree handles an unborn repository against the empty tree', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gg-unborn-'))
+  const run = (...args) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' })
+  run('init', '-q')
+  writeFileSync(join(dir, 'new file.txt'), 'one\ntwo\n')
+  run('add', 'new file.txt')
+  const result = await internals.workingTree(dir)
+  assert.deepEqual(result.staged, [{ status: 'A', path: 'new file.txt', additions: 2, deletions: 0 }])
+  assert.deepEqual(result.unstaged, [])
+})
+
+test('workingTree reports separate staged and unstaged counts, including partial staging', async () => {
+  const dir = repo({ 'partial.txt': 'base\n', 'deleted.txt': 'delete\n' })
+  const run = (...args) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' })
+  writeFileSync(join(dir, 'partial.txt'), 'base\nstaged\n')
+  run('add', 'partial.txt')
+  writeFileSync(join(dir, 'partial.txt'), 'base\nstaged\nunstaged\n')
+  run('rm', '--cached', 'deleted.txt')
+  writeFileSync(join(dir, 'deleted.txt'), 'delete\nrestored\n')
+  writeFileSync(join(dir, 'untracked.txt'), 'u\n')
+  const result = await internals.workingTree(dir)
+  const staged = new Map(result.staged.map(file => [file.path, file]))
+  const unstaged = new Map(result.unstaged.map(file => [file.path, file]))
+  assert.deepEqual(staged.get('partial.txt'), { status: 'M', path: 'partial.txt', additions: 1, deletions: 0 })
+  assert.deepEqual(unstaged.get('partial.txt'), { status: 'M', path: 'partial.txt', additions: 1, deletions: 0 })
+  assert.deepEqual(staged.get('deleted.txt'), { status: 'D', path: 'deleted.txt', additions: 0, deletions: 1 })
+  assert.equal(unstaged.has('deleted.txt'), false, 'restoring a staged deletion makes it untracked')
+  assert.deepEqual(result.untracked, [
+    { status: '?', path: 'deleted.txt', additions: null, deletions: null },
+    { status: '?', path: 'untracked.txt', additions: null, deletions: null },
+  ])
 })
 
 test('parseStatusV2 separates staged, unstaged and untracked', () => {
