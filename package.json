@@ -18,7 +18,8 @@
     "lib",
     "client.js",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "dsh": {
     "bundle": {
@@ -28,7 +29,22 @@
       "platform": "web"
     }
   },
+  "scripts": {
+    "test": "node --test \"tests/*.test.js\"",
+    "build:syntax": "node scripts/build-syntax.js",
+    "test:browser": "node tests/headless/run.mjs"
+  },
   "engines": {
     "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "highlight.js": "11.11.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12",
+    "playwright-core": "1.58.2",
+    "pngjs": "7.0.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
   }
 }
