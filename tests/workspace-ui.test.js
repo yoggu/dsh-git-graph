@@ -79,6 +79,18 @@ test('raw diff metadata is collapsed outside the code preview', async () => {
   ui.unmount()
 })
 
+test('diff layout selector exposes Auto, Split, and Unified modes', async () => {
+  const ui = mount('DiffPanel', { sessionId: 'a', params: { mode: 'working', path: 'a.ts' } }, () => Promise.resolve({ patch: '@@ -1 +1 @@\n-old\n+new\n' }))
+  await ui.settle()
+  const select = find(ui.tree, node => node.type === 'select' && node.props['aria-label'] === 'Diff layout')
+  assert.ok(select)
+  assert.deepEqual(select.children.map(option => option.props.value), ['auto', 'split', 'unified'])
+  select.props.onChange({ target: { value: 'split' } }); ui.render()
+  assert.equal(find(ui.tree, node => node.type === 'select' && node.props['aria-label'] === 'Diff layout').props.value, 'split')
+  assert.ok(find(ui.tree, node => node.props['aria-label'] === 'Split diff'))
+  ui.unmount()
+})
+
 test('Git tab title includes an icon and readable label', () => {
   function GitIcon() {}
   const title = runInNewContext(`${section('GraphTitle', 'CommitTitle')}\nGraphTitle`, { h, GitIcon })()

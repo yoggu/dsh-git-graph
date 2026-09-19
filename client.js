@@ -709,6 +709,64 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
       return { rows, hunks, additions, deletions, binary }
     }
 
+    /**
+     * Align a unified patch into rows suitable for a side-by-side preview.
+     * Context remains paired; adjacent delete/add runs become replacement rows,
+     * with null cells when one side is longer. Hunk and note rows span both
+     * sides so navigation and no-newline markers remain understandable.
+     */
+    function planSplitRows(rows = []) {
+      const planned = []
+      const cell = (row, index) => row ? { text: row.text, number: row.old ?? row.new ?? null, row, index } : null
+      for (let i = 0; i < rows.length;) {
+        const row = rows[i]
+        if (row.kind === 'meta') { i++; continue }
+        if (row.kind === 'hunk') {
+          planned.push({ kind: 'hunk', row, index: i })
+          i++
+          continue
+        }
+        if (row.kind === 'note') {
+          planned.push({ kind: 'note', row, index: i })
+          i++
+          continue
+        }
+        if (row.kind === 'ctx') {
+          planned.push({ kind: 'line', old: cell(row, i), new: cell(row, i), indices: [i] })
+          i++
+          continue
+        }
+        if (row.kind === 'del' || row.kind === 'add') {
+          const start = i
+          const deletes = [], adds = []
+          while (i < rows.length && (rows[i].kind === 'del' || rows[i].kind === 'add')) {
+            const current = rows[i]
+            ;(current.kind === 'del' ? deletes : adds).push(cell(current, i))
+            i++
+          }
+          const count = Math.max(deletes.length, adds.length)
+          for (let offset = 0; offset < count; offset++) {
+            const old = deletes[offset] || null
+            const newer = adds[offset] || null
+            planned.push({ kind: 'line', old, new: newer, indices: [old?.index, newer?.index].filter(index => index != null), replacement: !!old && !!newer })
+          }
+          // Defensive progress guarantee if a future row kind is introduced.
+          if (i === start) i++
+          continue
+        }
+        planned.push({ kind: 'line', old: cell(row, i), new: null, indices: [i] })
+        i++
+      }
+      return planned
+    }
+
+    /** Auto keeps the established unified view until a real width is measured. */
+    function resolveDiffLayout(mode = 'auto', width = null, splitAt = 900) {
+      const normalized = mode === 'split' || mode === 'unified' ? mode : 'auto'
+      if (normalized !== 'auto') return normalized
+      return Number.isFinite(width) && width >= splitAt ? 'split' : 'unified'
+    }
+
     /** Group is part of identity: the same path can be staged AND unstaged. */
     function diffFileIdentity(file, mode = 'commits') {
       const group = mode === 'working'
@@ -723,11 +781,14 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
       const [wrap, setWrap] = React.useState(false)
       const [context, setContext] = React.useState(3)
       const [syntax, setSyntax] = React.useState(true)
+      const [layoutMode, setLayoutMode] = React.useState('auto')
+      const [paneWidth, setPaneWidth] = React.useState(null)
       const [retry, setRetry] = React.useState(0)
       const [state, setState] = React.useState({ key: '', status: 'loading' })
       const [hunk, setHunk] = React.useState(-1)
       const hunkNodes = React.useRef([])
       const scroll = React.useRef(null)
+      const panelRef = React.useRef(null)
       const mode = params.mode === 'working' ? 'working' : 'commits'
       const path = typeof params.path === 'string' ? params.path : ''
       const oldPath = typeof params.oldPath === 'string' ? params.oldPath : undefined
@@ -757,8 +818,20 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
         })
         return cleanup
       }, [key, signal])
+      React.useEffect(() => {
+        const node = panelRef.current
+        if (!node || typeof ResizeObserver !== 'function') return undefined
+        const observer = new ResizeObserver(entries => {
+          const width = entries[0]?.contentRect?.width
+          if (Number.isFinite(width)) setPaneWidth(width)
+        })
+        observer.observe(node)
+        return () => observer.disconnect()
+      }, [])
       const current = state.key === key ? state : { status: 'loading' }
+      const layout = resolveDiffLayout(layoutMode, paneWidth)
       const parsed = React.useMemo(() => parseUnifiedPatch(current.patch), [current.patch])
+      const splitRows = React.useMemo(() => planSplitRows(parsed.rows), [parsed.rows])
       // Bound browser node creation even for a patch made of extremely short lines.
       const visibleRows = parsed.rows.slice(0, 12000)
       const language = GitSyntax.languageForPath(path)
@@ -773,6 +846,29 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
         if (node && scroll.current) scroll.current.scrollTop += node.getBoundingClientRect().top - scroll.current.getBoundingClientRect().top
       }
       const title = oldPath && oldPath !== path ? `${oldPath} → ${path}` : path
+      const highlightedCode = row => {
+        if (!row) return h('span', { className: 'gg-du-code gg-du-code-empty' }, '\u00a0')
+        const tokens = highlights?.get(row.index)
+        return h('span', { className: 'gg-du-code' }, row.text[0], tokens
+          ? tokens.map((token, j) => h('span', { key: j, className: token.classes || undefined }, token.text))
+          : row.text.slice(1) || '\u00a0')
+      }
+      const splitCell = (side, cell) => h('div', { className: `gg-du-side gg-du-${side}${cell ? ` gg-du-${cell.row.kind}` : ' is-empty'}` },
+        h('span', { className: 'gg-du-number', 'aria-label': cell?.number == null ? undefined : `${side === 'old' ? 'Old' : 'New'} line ${cell.number}` }, cell?.number ?? null),
+        highlightedCode(cell))
+      const splitPatch = h('div', { className: `gg-du-patch gg-du-split${wrap ? ' is-wrapped' : ''}`, 'aria-label': 'Split diff' }, splitRows.slice(0, 12000).map((item, i) => {
+        if (item.kind === 'hunk') return h('div', { key: `h${i}`, className: `gg-du-split-hunk${item.row.hunk === hunk ? ' is-current' : ''}`, ref: node => { hunkNodes.current[item.row.hunk] = node } }, item.row.text)
+        if (item.kind === 'note') return h('div', { key: `n${i}`, className: 'gg-du-split-note' }, item.row.text)
+        return h('div', { key: `l${i}`, className: `gg-du-split-row gg-du-${item.replacement ? 'replacement' : 'line'}` }, splitCell('old', item.old), splitCell('new', item.new))
+      }))
+      const unifiedPatch = h('div', { className: `gg-du-patch${wrap ? ' is-wrapped' : ''}`, 'aria-label': 'Unified diff' }, visibleRows.map((row, i) => row.kind === 'meta' ? null : h('div', {
+        key: i, className: `gg-du-line gg-du-${row.kind}${row.hunk === hunk ? ' is-current' : ''}`,
+        ref: row.kind === 'hunk' ? node => { hunkNodes.current[row.hunk] = node } : undefined,
+      }, h('span', { className: 'gg-du-number', 'aria-label': row.old === null ? undefined : `Old line ${row.old}` }, row.old),
+      h('span', { className: 'gg-du-number', 'aria-label': row.new === null ? undefined : `New line ${row.new}` }, row.new),
+      h('span', { className: 'gg-du-code' }, highlights?.has(i)
+        ? [row.text[0], ...highlights.get(i).map((token, j) => h('span', { key: j, className: token.classes || undefined }, token.text))]
+        : row.text || '\u00a0'))))
       let body
       if (!path) body = h('div', { className: 'gg-empty' }, 'Select a file to inspect its changes.')
       else if (untracked) body = h('div', { className: 'gg-empty' }, 'Untracked file. Content preview is not available from the current Git host; this file is not included in git diff.')
@@ -784,19 +880,13 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
         parsed.binary ? h('div', { className: 'gg-du-message' }, 'Binary file changed — no textual preview.') : null,
         !parsed.rows.length ? h('div', { className: 'gg-empty' }, 'No textual changes. The file may have changed since this list was read.') : null,
         parsed.rows.length > 0 && !parsed.hunks.length && !parsed.binary ? h('div', { className: 'gg-du-message' }, 'Metadata-only change (for example a rename or file mode change).') : null,
-        h('div', { className: `gg-du-patch${wrap ? ' is-wrapped' : ''}`, 'aria-label': 'Unified diff' }, visibleRows.map((row, i) => row.kind === 'meta' ? null : h('div', {
-          key: i, className: `gg-du-line gg-du-${row.kind}${row.hunk === hunk ? ' is-current' : ''}`,
-          ref: row.kind === 'hunk' ? node => { hunkNodes.current[row.hunk] = node } : undefined,
-        }, h('span', { className: 'gg-du-number', 'aria-label': row.old === null ? undefined : `Old line ${row.old}` }, row.old),
-        h('span', { className: 'gg-du-number', 'aria-label': row.new === null ? undefined : `New line ${row.new}` }, row.new),
-        h('span', { className: 'gg-du-code' }, highlights?.has(i)
-          ? [row.text[0], ...highlights.get(i).map((token, j) => h('span', { key: j, className: token.classes || undefined }, token.text))]
-          : row.text || '\u00a0')))),
+        layout === 'split' ? splitPatch : unifiedPatch,
         cut ? h('div', { className: 'gg-du-message', role: 'status' }, 'Partial diff: output reached the host or display limit. Counts describe only the returned patch.') : null)
-      return h('section', { className: 'gg-du-panel', 'aria-label': title ? `Diff for ${title}` : 'Diff preview' },
+      return h('section', { ref: panelRef, className: 'gg-du-panel', 'aria-label': title ? `Diff for ${title}` : 'Diff preview' },
         h('div', { className: 'gg-du-title', title }, title || 'Diff preview'),
         h('div', { className: 'gg-du-controls' },
           h('button', { type: 'button', className: 'gg-du-button', 'aria-pressed': wrap, onClick: () => setWrap(value => !value) }, 'Wrap'),
+          h('label', { className: 'gg-du-context' }, 'Layout ', h('select', { value: layoutMode, onChange: event => setLayoutMode(event.target.value), 'aria-label': 'Diff layout' }, [['auto', 'Auto'], ['split', 'Split'], ['unified', 'Unified']].map(([value, label]) => h('option', { key: value, value }, label)))),
           h('button', { type: 'button', className: 'gg-du-button', disabled: !language, 'aria-label': 'Syntax highlighting', 'aria-pressed': syntax && !!highlights,
             title: !language ? 'Plain text: unsupported file type' : highlights ? `${language} highlighting — shown diff context only` : 'Highlighting off or diff exceeds the 200 KB / 5,000 line limit', onClick: () => setSyntax(value => !value) }, language || 'Plain text'),
           h('label', { className: 'gg-du-context' }, 'Context ', h('select', { value: context, onChange: event => setContext(Number(event.target.value)), 'aria-label': 'Context lines' }, [0, 3, 10, 25, 50, 100].map(value => h('option', { key: value, value }, value)))),
@@ -1275,6 +1365,17 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
 .gg-du-scroll { flex: 1 1 0; min-height: 0; min-width: 0; overflow: auto; overscroll-behavior: contain; position: relative; }
 .gg-du-patch { width: max-content; min-width: 100%; font: 12px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; tab-size: 4; }
 .gg-du-line { display: grid; grid-template-columns: 5ch 5ch minmax(0, 1fr); min-height: 1.6em; }
+.gg-du-split { min-width: 720px; }
+.gg-du-split-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); min-height: 1.6em; }
+.gg-du-side { display: grid; grid-template-columns: 5ch minmax(0, 1fr); min-width: 0; }
+.gg-du-side.gg-du-old { border-right: 1px solid var(--dsw-alias-border-l1); }
+.gg-du-side.gg-du-old.gg-du-del, .gg-du-side.gg-du-old.gg-du-replacement { background: rgba(248, 81, 73, .13); }
+.gg-du-side.gg-du-new.gg-du-add, .gg-du-side.gg-du-new.gg-du-replacement { background: rgba(46, 160, 67, .13); }
+.gg-du-side.is-empty { background: var(--dsw-alias-bg-layer-2); opacity: .4; }
+.gg-du-split-row .gg-du-old .gg-du-code::first-letter { color: var(--dsw-alias-label-secondary); }
+.gg-du-split-hunk { grid-column: 1 / -1; min-height: 1.6em; padding: 0 8px; background: rgba(76, 154, 255, .12); color: var(--dsw-alias-brand-primary); }
+.gg-du-split-hunk.is-current { box-shadow: inset 3px 0 var(--dsw-alias-brand-primary); }
+.gg-du-split-note { grid-column: 1 / -1; min-height: 1.6em; padding: 0 8px; color: var(--dsw-alias-label-secondary); font-style: italic; }
 .gg-du-number { text-align: right; padding: 0 6px 0 2px; user-select: none; color: var(--dsw-alias-label-secondary); border-right: 1px solid var(--dsw-alias-border-l1); font-variant-numeric: tabular-nums; }
 .gg-du-code { padding: 0 8px; white-space: pre; }
 .gg-du-add { background: rgba(46, 160, 67, .13); }

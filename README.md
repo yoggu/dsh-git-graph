@@ -25,8 +25,12 @@ but ordinary commit/file clicks no longer open tabs. No arbitrary-commit compari
 UI is currently exposed.
 
 Known limits: untracked files are listed but their content is not available from
-the current host API; a clear message replaces the misleading empty diff. Code
-preview is unified (not two-column); intraline change highlighting is not included.
+the current host API; a clear message replaces the misleading empty diff. The diff
+preview has an accessible **Layout** selector: **Auto** uses unified below 900px and
+split above it, while **Split** and **Unified** are explicit overrides. Split mode
+pairs adjacent replacement blocks, pads one-sided rows, keeps context aligned, and
+renders hunk/no-newline rows across both sides. Syntax highlighting is tokenized
+independently for old and new cells. Intraline change highlighting is not included.
 Very short views allow scrolling rather than clipping file controls.
 
 ### Graph and diff colors

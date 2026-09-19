@@ -8,7 +8,7 @@ const snippet = new URL('../diff-workspace.snippet.js', import.meta.url)
 const source = readFileSync(existsSync(snippet) ? snippet : new URL('../client.js', import.meta.url), 'utf8')
 const helpers = source.split('// BEGIN DIFF UI PURE HELPERS')[1]?.split('// END DIFF UI PURE HELPERS')[0]
 assert.ok(helpers, 'Diff UI helper markers must remain in client.js after integration')
-const { parseUnifiedPatch: parse, diffFileIdentity: identity } = runInNewContext(`${helpers}; ({ parseUnifiedPatch, diffFileIdentity })`)
+const { parseUnifiedPatch: parse, diffFileIdentity: identity, planSplitRows, resolveDiffLayout } = runInNewContext(`${helpers}; ({ parseUnifiedPatch, diffFileIdentity, planSplitRows, resolveDiffLayout })`)
 const own = value => JSON.parse(JSON.stringify(value))
 
 test('unified numbering, counts, omitted counts and multiple hunks', () => {
@@ -51,6 +51,26 @@ test('empty, metadata, binary and incomplete patches are safe', () => {
 test('text is preserved including CR and HTML, never interpreted', () => {
   const p = parse('@@ -0,0 +1 @@\n+<img onerror="bad()">\r\n')
   assert.equal(p.rows[1].text, '+<img onerror="bad()">\r')
+})
+
+test('split planning pairs replacements and pads unequal runs', () => {
+  const p = parse('@@ -1,4 +1,3 @@\n keep\n-old one\n-old two\n+new one\n tail\n')
+  const rows = planSplitRows(p.rows)
+  const replacement = rows.filter(row => row.replacement)
+  assert.equal(replacement.length, 1)
+  assert.equal(replacement[0].old.row.kind, 'del')
+  assert.equal(replacement[0].new.row.kind, 'add')
+  const padded = rows.find(row => row.old?.row.text === '-old two')
+  assert.equal(padded.new, null)
+  assert.ok(rows.some(row => row.kind === 'hunk'))
+})
+
+test('layout selector preserves explicit modes and uses unified on narrow auto', () => {
+  assert.equal(resolveDiffLayout('split', 300), 'split')
+  assert.equal(resolveDiffLayout('unified', 1800), 'unified')
+  assert.equal(resolveDiffLayout('auto', 899), 'unified')
+  assert.equal(resolveDiffLayout('auto', 900), 'split')
+  assert.equal(resolveDiffLayout('auto', null), 'unified')
 })
 
 test('group plus path identity keeps simultaneous staged/unstaged distinct', () => {
