@@ -12,6 +12,8 @@ const h = (type, props, ...children) => ({ type, props: props || {}, children: c
 const nodes = tree => !tree || typeof tree !== 'object' ? [] : [tree, ...[...tree.children, tree.props.first, tree.props.second].flatMap(nodes)]
 const find = (tree, predicate) => nodes(tree).find(predicate)
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no }); return { promise, resolve, reject } }
+// The real formatter rather than a stub, so a missing snapshot time is exercised.
+const formatTime = runInNewContext(`${section('formatTime', 'sessionOf')}\nformatTime`, {})
 
 function mount(name, initialProps, call = () => Promise.resolve({})) {
   const slots = [], effects = []
@@ -34,7 +36,7 @@ function mount(name, initialProps, call = () => Promise.resolve({})) {
     layout: commits => ({ rows: commits.map(commit => ({ commit })), edges: [], columnCount: 1 }),
     ROW_H: 26, LANE_X0: 12, LANE_W: 12, EMPTY_TREE: 'empty',
     GraphCanvas() {}, CommitRow() {}, GitIcon() {},
-    copyText() {}, formatDate: x => x, formatTime: () => 'now',
+    copyText() {}, formatDate: x => x, formatTime,
     window: { innerWidth: 1200, innerHeight: 800 },
     document: { addEventListener() {}, removeEventListener() {} },
     ResizeObserver: class { observe() {} disconnect() {} },
@@ -84,6 +86,46 @@ test('Git tab title includes an icon and readable label', () => {
   assert.ok(nodes(title).some(node => node.children.includes('Git')))
 })
 
+test('the Git graph guide capsule carries the tab’s branch glyph', () => {
+  const GitIcon = function GitIcon() {}
+  const glyph = runInNewContext(`${section('GuideGlyph', 'ContextMenu')}\nGuideGlyph`, { h, GitIcon })
+  const constants = [
+    "const ID = 'git-graph', KIND = 'git-graph'",
+    "const COMMIT_ID = 'commit', COMMIT_KIND = 'commit'",
+    "const DIFF_ID = 'diff', DIFF_KIND = 'diff'",
+    "const CHANGES_ID = 'changes', CHANGES_KIND = 'changes'",
+  ].join('\n')
+  const slice = source.slice(source.indexOf('    const definitions = ['), source.indexOf('    /** Styles, built once and removed with the plugin. */'))
+  const definitions = runInNewContext(`${constants}\n${slice}\ndefinitions`, { GuideGlyph: glyph })
+  const [entry] = definitions[0].guide
+  assert.equal(entry.title(), 'Git graph')
+  assert.equal(entry.icon, glyph)
+  const icon = entry.icon({ size: 26 })
+  assert.equal(icon.type, GitIcon)
+  assert.equal(icon.props.name, 'branch')
+  assert.equal(icon.props.size, 26)
+  assert.equal(icon.props.className, 'gg-guide-icon')
+  assert.match(source, /\.gg-guide-icon\s*\{[^}]*color: #ed7957;/)
+})
+
+test('a failed working-tree read reports itself instead of crashing the view', async () => {
+  const ui = mount('ChangesView',
+    { sessionId: 'a', tabInfo: { tab: { signal: new AbortController().signal } } },
+    () => Promise.reject(new Error('This session is not running')))
+  await ui.settle()
+  const summary = find(ui.tree, node => node.props.className === 'gg-diff-summary')
+  assert.equal(summary.children.join(''), 'Snapshot unavailable')
+  assert.match(find(ui.tree, node => node.props.className === 'gg-error').children.join(''), /not running/)
+  ui.unmount()
+})
+
+test('formatTime refuses a moment that does not exist', () => {
+  assert.equal(formatTime(null), null)
+  assert.equal(formatTime(undefined), null)
+  assert.equal(formatTime(new Date('nonsense')), null)
+  assert.equal(typeof formatTime(new Date('2026-01-02T03:04:05')), 'string')
+})
+
 test('file statuses expose semantic labels and distinct styling hooks', () => {
   const ui = mount('FileWorkspace', { sessionId: 'a', files: ['M', 'A', 'D', 'R100'].map(status => ({ path: status, status })) })
   const badges = nodes(ui.tree).filter(n => n.props.className === 'gg-du-status')
@@ -97,6 +139,16 @@ test('SVG sits above interaction backgrounds without intercepting clicks', () =>
   assert.match(source, /\.gg-canvas\s*\{\s*z-index: 2;/)
   assert.match(source, /\.gg-rows\s*\{\s*z-index: 1;/)
   assert.match(source, /\.gg-canvas\s*\{[^}]*pointer-events: none/s)
+})
+
+test('history and details share a row only in a genuinely wide pane', async () => {
+  const ui = mount('GraphView',
+    { sessionId: 'a', tabInfo: { tab: { signal: new AbortController().signal } } },
+    () => Promise.resolve({ commits: [], nextSkip: 0, exhausted: true, refs: { head: 'main', remotes: [] } }))
+  await ui.settle()
+  const split = find(ui.tree, node => node.type?.name === 'SplitPane')
+  assert.equal(split.props.breakpoint, 1200)
+  ui.unmount()
 })
 
 test('working-file selection survives refreshed object identities and ordering', () => {

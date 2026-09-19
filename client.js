@@ -572,7 +572,7 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
       const openCommit = commit => setSelected(commit.hash)
       const flash = text => { setNotice(text); clearTimeout(noticeTimer.current); noticeTimer.current = setTimeout(() => setNotice(null), 1800) }
       const history = h(SplitPane, {
-        breakpoint: 960, initial: 32, label: 'Resize history and commit details',
+        breakpoint: 1200, initial: 32, label: 'Resize history and commit details',
         first: h('section', { className: 'gg-root gg-history', 'aria-label': 'Commit history' },
           h('div', { className: 'gg-section-heading' }, h('span', null, 'COMMITS'), h('span', { className: 'gg-count' }, `${state.commits.length} loaded`)),
           error ? h('div', { className: 'gg-error', role: 'alert' }, error) : null,
@@ -663,11 +663,12 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
         }).catch(error => { if (active && error.name !== 'AbortError') setState(current => ({ ...current, busy: false, error: String(error.message ?? error) })) })
         return () => { active = false }
       }, [sessionId, signal, revision, refresh])
+      const readAt = formatTime(state.readAt)
       return h('section', { className: 'gg-root', 'aria-label': 'Working changes' },
         h('div', { className: 'gg-toolbar' }, h('span', { className: 'gg-repo' }, 'Working changes'),
           h('span', { className: 'gg-count' }, `${state.files.length} files`),
           h('button', { className: 'gg-icon-btn', 'aria-label': 'Refresh changes', disabled: state.busy, onClick: () => setRefresh(value => value + 1) }, h(GitIcon, { name: 'refresh' }))),
-        h('div', { className: 'gg-diff-summary', role: 'status' }, state.busy ? 'Reading working tree…' : `Snapshot ${formatTime(state.readAt)} · refresh to see the agent’s latest edits`),
+        h('div', { className: 'gg-diff-summary', role: 'status' }, state.busy ? 'Reading working tree…' : readAt === null ? 'Snapshot unavailable' : `Snapshot ${readAt} · refresh to see the agent’s latest edits`),
         state.error ? h('div', { className: 'gg-error', role: 'alert' }, state.error) : null,
         !state.busy && !state.error && state.files.length === 0 ? h('div', { className: 'gg-empty' }, 'Working tree clean. No uncommitted changes.') : null,
         h(FileWorkspace, { files: state.files, mode: 'working', sessionId, signal, revision: revision + refresh }))
@@ -871,15 +872,19 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
      * sidebar's own controls are inline SVG at a fixed 16px box; matching that
      * keeps these buttons looking like the ones beside them.
      *
-     * @param props - which glyph to draw.
+     * The default size is the 15px toolbar box these buttons share; the guide
+     * capsule asks for its own pixel size and is passed one.
+     *
+     * @param props - which glyph to draw, at what size and with which class.
      * @returns the SVG element.
      */
-    function GitIcon({ name }) {
+    function GitIcon({ name, size = 15, className }) {
       const common = {
-        width: 15, height: 15, viewBox: '0 0 16 16', fill: 'none',
+        width: size, height: size, viewBox: '0 0 16 16', fill: 'none',
         stroke: 'currentColor', 'stroke-width': 1.4,
         'stroke-linecap': 'round', 'stroke-linejoin': 'round',
         'aria-hidden': 'true',
+        ...(className === undefined ? {} : { className }),
       }
       const paths = {
         refresh: ['M13.5 8a5.5 5.5 0 1 1-1.6-3.9', 'M13.6 1.9v3.2h-3.2'],
@@ -891,6 +896,21 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
         collapse: ['M3 8h10'],
       }
       return h('svg', common, (paths[name] ?? []).map((d, i) => h('path', { key: i, d })))
+    }
+
+    /**
+     * The guide capsule's glyph: the tab chip's branch mark, at the guide's size.
+     *
+     * The guide renders an entry's icon at its own pixel size and, without one,
+     * falls back to its neutral cube placeholder. The plugin wants the capsule to
+     * carry what the Git tab carries, so this wrapper forwards the size and names
+     * its own class for the orange ink.
+     *
+     * @param props - the size the guide's entry renderer asked for.
+     * @returns the SVG element.
+     */
+    function GuideGlyph({ size }) {
+      return h(GitIcon, { name: 'branch', size: size ?? 16, className: 'gg-guide-icon' })
     }
 
     /**
@@ -1047,11 +1067,18 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
     /**
      * Format a time of day.
      *
-     * @param date - the moment.
-     * @returns the local time.
+     * A working-tree read that failed leaves no snapshot time behind, so an
+     * absent or unreadable moment returns `null` instead of throwing: the view
+     * reports the failure rather than dying inside a formatter.
+     *
+     * @param date - the moment, or nothing when there is no reading.
+     * @returns the local time, or `null` when there is none to show.
      */
     function formatTime(date) {
-      return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      if (date === null || date === undefined) return null
+      const when = date instanceof Date ? date : new Date(date)
+      if (Number.isNaN(when.getTime())) return null
+      return when.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
     }
 
     /**
@@ -1173,6 +1200,7 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
           order: 20,
           title: () => 'Git graph',
           description: () => 'Commit history and uncommitted changes of this session’s workspace',
+          icon: GuideGlyph,
         }],
       },
       {
@@ -1199,6 +1227,8 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
     const CSS = `
 .gg-tab-title { display: inline-flex; align-items: center; gap: 5px; }
 .gg-tab-icon { display: inline-flex; color: #ed7957; }
+/* The guide capsule carries the tab chip's branch mark in the same ink. */
+.gg-guide-icon { color: #ed7957; }
 .gg-du-metadata { flex: none; max-height: 30%; overflow: auto; padding: 3px 10px; border-bottom: 1px solid var(--dsw-alias-border-l1); color: var(--dsw-alias-label-secondary); font-size: 10px; }
 .gg-du-metadata summary { cursor: pointer; }
 .gg-du-metadata pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 5px 0; font: 10px/1.5 ui-monospace, monospace; }

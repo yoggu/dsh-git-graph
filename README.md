@@ -31,7 +31,8 @@ Very short views allow scrolling rather than clipping file controls.
 
 ### Graph and diff colors
 
-The Git tab carries a compact branch icon. Raw patch headers (`diff --git`,
+The Git tab carries a compact branch icon, and the guide's **Git graph**
+capsule carries the same mark. Raw patch headers (`diff --git`,
 `index`, `---`, `+++`) live in the collapsed **Diff metadata** disclosure, not
 between code lines. Hunk range headers remain in the preview for navigation.
 
