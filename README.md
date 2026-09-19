@@ -4,34 +4,32 @@ Git views in the right Sidebar of DSH Web: the commit history of this session's
 workspace as a lane graph, one commit's details and files, the diff of any file
 (historical or uncommitted), and the working tree an agent has left behind.
 
-## Persistent split-view browser
+## Graph, accordion, and diff tabs
 
-Open **Git graph** from the right Sidebar's own tab menu. The plugin adds no
-control of its own anywhere else in the interface.
+Open **Git graph** from the right Sidebar's tab menu. The plugin adds no control
+outside that sidebar.
 
-- **History** keeps the graph visible while selection updates a commit inspector.
-- **Changed files** remain visible while a single diff preview updates in place.
-- **Changes** switches inside the same Git view to staged, unstaged and untracked
-  groups. Refresh reads a new snapshot without changing the selected file if it remains.
-- Drag either divider, use its arrow keys, or double-click to reset. Narrow views
-  stack panes; expanded views arrange them side by side when enough width exists.
-- Arrow keys/Home/End navigate commits and files; file filtering, previous/next
-  buttons, unified old/new line numbers, wrapping, context selection and hunk
-  navigation make review possible without opening more tabs.
+- History is a full-width graph table with **Description**, **Date**, **Author**,
+  and short **Commit** columns.
+- When the worktree is dirty, a grey **Uncommitted changes (n)** row appears above
+  the commits. A partially staged path counts once in `n`, while its staged and
+  unstaged changes remain separate entries.
+- Clicking a commit or the uncommitted row expands its details directly beneath
+  that row; clicking it again collapses the accordion.
+- The accordion places commit metadata and message on the left and a compact,
+  hierarchical changed-file tree on the right. Files retain accessible status
+  letters and colors, plus per-file added/deleted line counts when Git reports them.
+- Clicking a changed file opens a separate **Diff** tab. Each file can have its
+  own tab, so the graph and other open diffs remain available.
+- **Changes** remains available for staged, unstaged, and untracked groups and
+  refreshes from the repository without writing to it.
 
-The sidebar's fullscreen action expands the same workspace. History/Changes
-switching keeps both views mounted. Legacy Commit and Diff tab links still work,
-but ordinary commit/file clicks no longer open tabs. No arbitrary-commit comparison
-UI is currently exposed.
-
-Known limits: untracked files are listed but their content is not available from
-the current host API; a clear message replaces the misleading empty diff. The diff
-preview has an accessible **Layout** selector: **Auto** uses unified below 900px and
-split above it, while **Split** and **Unified** are explicit overrides. Split mode
-pairs adjacent replacement blocks, pads one-sided rows, keeps context aligned, and
-renders hunk/no-newline rows across both sides. Syntax highlighting is tokenized
-independently for old and new cells. Intraline change highlighting is not included.
-Very short views allow scrolling rather than clipping file controls.
+The diff tab defaults to **Auto** layout: it uses Combined view below 900px and
+Split view at or above 900px. **Split** and **Combined** are explicit overrides.
+Split mode pairs adjacent replacement blocks, pads one-sided rows, keeps context
+aligned, and renders hunk/no-newline rows across both sides. Syntax highlighting is
+tokenized independently for old and new cells. Intraline change highlighting is
+not included. Very short views allow scrolling rather than clipping file controls.
 
 ### Graph and diff colors
 
@@ -58,9 +56,10 @@ To change grammars or tokenization: edit `scripts/syntax-entry.js`, then run
 block in `client.js`, preserving its hand-edited plugin code. License notices are
 in `THIRD_PARTY_NOTICES.md`.
 
-UX research: independently implemented selection-driven patterns documented by
-[Sublime Merge](https://www.sublimemerge.com/docs/getting_started#understanding_the_interface),
-[GitKraken](https://help.gitkraken.com/gitkraken-desktop/interface/) and
+UX research: independently implemented patterns informed by the public
+[VS Code Git Graph documentation](https://github.com/mhutchie/vscode-git-graph/blob/develop/README.md),
+plus [Sublime Merge](https://www.sublimemerge.com/docs/getting_started#understanding_the_interface),
+[GitKraken](https://help.gitkraken.com/gitkraken-desktop/interface/), and
 [GitHub Desktop](https://docs.github.com/en/desktop/making-changes-in-a-branch/viewing-the-branch-history-in-github-desktop).
 
 ## What it never does
