@@ -105,7 +105,7 @@ export function diffTabPayload({ sessionId, mode, path, oldPath = undefined, bas
 }
 
 export const DIFF_LAYOUT_OPTIONS = Object.freeze([
-  Object.freeze({ value: 'auto', label: 'Auto' }),
-  Object.freeze({ value: 'split', label: 'Split' }),
-  Object.freeze({ value: 'unified', label: 'Combined' }),
+  Object.freeze({ value: 'auto', label: 'Auto view' }),
+  Object.freeze({ value: 'split', label: 'Side by side' }),
+  Object.freeze({ value: 'unified', label: 'Inline' }),
 ])

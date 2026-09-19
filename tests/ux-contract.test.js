@@ -16,6 +16,7 @@ import {
 } from './ux-fixtures.js'
 
 const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+const appSource = source.split('// END BUNDLED SYNTAX')[1] ?? source
 const pure = source.split('// BEGIN DIFF UI PURE HELPERS')[1]?.split('// END DIFF UI PURE HELPERS')[0]
 assert.ok(pure, 'integrated client must retain the pure diff helper boundary')
 const helpers = runInNewContext(`${pure}; ({ parseUnifiedPatch, diffFileIdentity, resolveDiffLayout })`)
@@ -36,6 +37,7 @@ test('commit click is an accordion transition and a second click collapses it', 
   assert.equal(toggleAccordion('abc', 'abc'), null)
   assert.equal(toggleAccordion('abc', 'def'), 'def')
   assert.ok(sourceHas(/setSelected\(current => current === commit\.hash \? null : commit\.hash\)/)
+    || sourceHas(/selectAccordion\(current => current === commit\.hash \? null : commit\.hash\)/)
     || sourceHas(/toggleAccordion|setExpandedCommit|expandedCommit/),
     'commit click must toggle the selected accordion row')
   assert.ok(sourceHas(/aria-expanded/) || sourceHas(/CommitInspector[\s\S]{0,500}selected/),
@@ -58,11 +60,13 @@ test('changed files are rendered as a deterministic folder hierarchy', () => {
   assert.match(source, /sort\(/, 'folder and file siblings must be sorted deterministically')
 })
 
-test('status badges expose semantic labels and status-specific colors', () => {
+test('file icons expose semantic status labels and status-specific color accents', () => {
   assert.deepEqual(Object.fromEntries(Object.keys(STATUS_CONTRACT).map(code => [code, statusContract(code).label])), {
     M: 'Modified', A: 'Added', D: 'Deleted', R: 'Renamed', C: 'Copied', U: 'Unmerged', '?': 'Untracked',
   })
-  assert.match(source, /data-status/)
+  assert.match(source, /function FileIcon/)
+  assert.match(source, /gg-status-accent/)
+  assert.match(source, /gg-sr-only/)
   for (const [code, detail] of Object.entries(STATUS_CONTRACT)) {
     assert.ok(source.includes(`data-status='${code}'`) || source.includes(`data-status=\"${code}\"`) || source.includes(`status-${code}`), `${code} status color hook`)
     assert.match(source, new RegExp(detail.label), `${code} semantic label`)
@@ -106,19 +110,35 @@ test('uncommitted synthetic row is first, expandable, muted, and counts unique p
   assert.match(source, /expandable|aria-expanded|onClick/, 'synthetic row must expand')
 })
 
-test('diff layout selector defaults Auto and labels Combined for internal unified mode', () => {
-  assert.deepEqual(DIFF_LAYOUT_OPTIONS.map(option => option.label), ['Auto', 'Split', 'Combined'])
+test('diff layout selector uses compact VS Code-style labels', () => {
+  assert.deepEqual(DIFF_LAYOUT_OPTIONS.map(option => option.label), ['Auto view', 'Side by side', 'Inline'])
   assert.equal(helpers.resolveDiffLayout('auto', null), 'unified')
   assert.match(source, /useState\(['"]auto['"]\)/)
-  assert.match(source, /\[['"]auto['"],\s*['"]Auto['"]\]/)
-  assert.match(source, /\[['"]split['"],\s*['"]Split['"]\]/)
-  assert.match(source, /\[['"]unified['"],\s*['"]Combined['"]\]/)
+  assert.match(source, /useState\(true\)/)
+  assert.match(source, /value:\s*['"]auto['"],\s*label:\s*['"]Auto view['"]/)
+  assert.match(source, /value:\s*['"]split['"],\s*label:\s*['"]Side by side['"]/)
+  assert.match(source, /value:\s*['"]unified['"],\s*label:\s*['"]Inline['"]/)
+  assert.match(source, /function CompactDropdown/)
+})
+
+test('commit detail loading renders inside the accordion shell', () => {
+  const accordion = source.slice(source.indexOf('function CommitAccordion'), source.indexOf('function WorkingAccordion'))
+  assert.match(accordion, /h\(AccordionSurface/)
+  assert.match(accordion, /Loading commit details…/)
+  assert.doesNotMatch(accordion, /className:\s*['"]gg-empty['"]/)
+})
+
+test('history loading is a progress status and terminal pagination renders no fake button', () => {
+  assert.match(source, /className:\s*['"]gg-history-status['"]/)
+  assert.match(source, /Loading history…/)
+  assert.match(source, /className:\s*['"]gg-spinner['"]/)
+  assert.doesNotMatch(source, /All commits loaded/)
 })
 
 test('diff tab definition is multi-instance and sidebar has no review-comment UI or storage', () => {
   const definition = source.slice(source.indexOf('id: DIFF_ID'), source.indexOf('id: CHANGES_ID'))
   assert.match(definition, /multiple:\s*true/, 'each clicked file must be able to open its own diff tab')
-  assert.doesNotMatch(source, /review comment|reviewComment|review-comments|ReviewComment|commentStorage/i)
-  assert.doesNotMatch(source, /localStorage|sessionStorage|indexedDB/i)
-  assert.doesNotMatch(source, /onComment|comments?\s*:/i)
+  assert.doesNotMatch(appSource, /review comment|reviewComment|review-comments|ReviewComment|commentStorage/i)
+  assert.doesNotMatch(appSource, /localStorage|sessionStorage|indexedDB/i)
+  assert.doesNotMatch(appSource, /onComment|comments?\s*:/i)
 })

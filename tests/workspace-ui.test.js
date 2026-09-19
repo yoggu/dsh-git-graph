@@ -14,6 +14,8 @@ const find = (tree, predicate) => nodes(tree).find(predicate)
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no }); return { promise, resolve, reject } }
 // The real formatter rather than a stub, so a missing snapshot time is exercised.
 const formatTime = runInNewContext(`${section('formatTime', 'sessionOf')}\nformatTime`, {})
+const openAccordionBySession = new Map()
+test.beforeEach(() => openAccordionBySession.clear())
 
 function mount(name, initialProps, call = () => Promise.resolve({})) {
   const slots = [], effects = []
@@ -34,14 +36,16 @@ function mount(name, initialProps, call = () => Promise.resolve({})) {
   const context = {
     React, h, call, GitSyntax, AbortController, setTimeout, clearTimeout,
     layout: commits => ({ rows: commits.map(commit => ({ commit })), edges: [], columnCount: 1 }),
-    ROW_H: 26, LANE_X0: 12, LANE_W: 12, EMPTY_TREE: 'empty',
-    GraphCanvas() {}, CommitRow() {}, GitIcon() {},
+    ROW_H: 26, LANE_X0: 12, LANE_W: 12, EMPTY_TREE: 'empty', ACCORDION_H: 300,
+    GraphCanvas() {}, CommitRow() {}, GitIcon() {}, FileIcon() {}, CommitAccordion() {}, WorkingAccordion() {},
+    openAccordionBySession,
     copyText() {}, formatDate: x => x, formatTime,
     window: { innerWidth: 1200, innerHeight: 800 },
     document: { addEventListener() {}, removeEventListener() {} },
     ResizeObserver: class { observe() {} disconnect() {} },
   }
-  const component = runInNewContext(`${section('SplitPane', 'GitIcon')}\n${section('ContextMenu', 'copyText')}\n${name}`, context)
+  const components = section('SplitPane', 'GitIcon').replace('    const openAccordionBySession = new Map()\n', '')
+  const component = runInNewContext(`${components}\n${section('ContextMenu', 'copyText')}\n${name}`, context)
   const render = () => {
     let budget = 30
     do { assert.ok(budget--, 'render must converge'); dirty = false; index = 0; tree = component(props); effects.splice(0).forEach(fn => fn()) } while (dirty)
@@ -58,10 +62,21 @@ function mount(name, initialProps, call = () => Promise.resolve({})) {
 }
 const fileButton = (tree, path) => find(tree, n => n.type === 'button' && n.props.title === path)
 const panel = tree => find(tree, n => n.type?.name === 'DiffPanel')
-const inspector = tree => find(tree, n => n.type?.name === 'CommitInspector')
+const accordion = tree => find(tree, n => n.type?.name === 'CommitAccordion')
 const commit = hash => ({ hash, parents: [], subject: hash, refs: [] })
 const page = hashes => ({ commits: hashes.map(commit), nextSkip: hashes.length, exhausted: false, refs: {} })
 const tabInfo = () => ({ tab: { signal: new AbortController().signal } })
+
+test('commit detail loading occupies the accordion shell', () => {
+  const pending = deferred()
+  const ui = mount('CommitAccordion', { hash: 'abc', sessionId: 'a', signal: tabInfo().tab.signal }, () => pending.promise)
+  const loading = find(ui.tree, node => node.type?.name === 'AccordionSurface')
+  assert.ok(loading)
+  assert.equal(loading.props.state, true)
+  assert.equal(loading.props.label, 'Loading commit details')
+  assert.ok(nodes(loading.props.first).some(node => node.props.className === 'gg-spinner'))
+  ui.unmount()
+})
 
 test('raw diff metadata is collapsed outside the code preview', async () => {
   const ui = mount('DiffPanel', { sessionId: 'a', params: { mode: 'working', path: 'a.ts' } }, () => Promise.resolve({ patch: 'diff --git a/a.ts b/a.ts\nindex abc..def 100644\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new\n' }))
@@ -79,14 +94,19 @@ test('raw diff metadata is collapsed outside the code preview', async () => {
   ui.unmount()
 })
 
-test('diff layout selector exposes Auto, Split, and Unified modes', async () => {
+test('diff toolbar defaults to wrapping and exposes compact layout and context controls', async () => {
   const ui = mount('DiffPanel', { sessionId: 'a', params: { mode: 'working', path: 'a.ts' } }, () => Promise.resolve({ patch: '@@ -1 +1 @@\n-old\n+new\n' }))
   await ui.settle()
-  const select = find(ui.tree, node => node.type === 'select' && node.props['aria-label'] === 'Diff layout')
+  const wrap = find(ui.tree, node => node.type === 'button' && node.props['aria-label'] === 'Toggle word wrap')
+  assert.equal(wrap.props['aria-pressed'], true)
+  const select = find(ui.tree, node => node.type?.name === 'CompactDropdown' && node.props.label === 'Diff layout')
   assert.ok(select)
-  assert.deepEqual(select.children.map(option => option.props.value), ['auto', 'split', 'unified'])
-  select.props.onChange({ target: { value: 'split' } }); ui.render()
-  assert.equal(find(ui.tree, node => node.type === 'select' && node.props['aria-label'] === 'Diff layout').props.value, 'split')
+  assert.deepEqual(JSON.parse(JSON.stringify(select.props.options.map(option => [option.value, option.label]))), [['auto', 'Auto view'], ['split', 'Side by side'], ['unified', 'Inline']])
+  const context = find(ui.tree, node => node.type?.name === 'CompactDropdown' && node.props.label === 'Context lines')
+  assert.equal(context.props.value, 3)
+  assert.equal(context.props.options[1].label, 'Context: 3')
+  select.props.onChange('split'); ui.render()
+  assert.equal(find(ui.tree, node => node.type?.name === 'CompactDropdown' && node.props.label === 'Diff layout').props.value, 'split')
   assert.ok(find(ui.tree, node => node.props['aria-label'] === 'Split diff'))
   ui.unmount()
 })
@@ -138,12 +158,14 @@ test('formatTime refuses a moment that does not exist', () => {
   assert.equal(typeof formatTime(new Date('2026-01-02T03:04:05')), 'string')
 })
 
-test('file statuses expose semantic labels and distinct styling hooks', () => {
+test('file statuses use file icons, accessible labels, and row color accents', () => {
   const ui = mount('FileWorkspace', { sessionId: 'a', files: ['M', 'A', 'D', 'R100'].map(status => ({ path: status, status })) })
-  const badges = nodes(ui.tree).filter(n => n.props.className === 'gg-du-status')
-  assert.deepEqual(badges.map(n => n.props['data-status']), ['M', 'A', 'D', 'R'])
-  assert.deepEqual(badges.map(n => n.props.title), ['Modified', 'Added', 'Deleted', 'Renamed'])
-  for (const status of ['M', 'A', 'D']) assert.ok(source.includes(`.gg-du-status[data-status='${status}']`))
+  const rows = nodes(ui.tree).filter(n => n.type === 'button' && n.props.className?.startsWith('gg-du-file'))
+  assert.deepEqual(rows.map(n => n.props['data-status']), ['M', 'A', 'D', 'R'])
+  assert.equal(nodes(ui.tree).filter(n => n.type?.name === 'FileIcon').length, 4)
+  const labels = nodes(ui.tree).filter(n => n.props.className === 'gg-sr-only').flatMap(n => n.children)
+  assert.deepEqual(labels, ['Modified: ', 'Added: ', 'Deleted: ', 'Renamed: '])
+  for (const status of ['M', 'A', 'D']) assert.ok(source.includes(`.gg-du-file[data-status='${status}']`))
 })
 
 test('SVG sits above interaction backgrounds without intercepting clicks', () => {
@@ -153,13 +175,29 @@ test('SVG sits above interaction backgrounds without intercepting clicks', () =>
   assert.match(source, /\.gg-canvas\s*\{[^}]*pointer-events: none/s)
 })
 
-test('history and details share a row only in a genuinely wide pane', async () => {
-  const ui = mount('GraphView',
-    { sessionId: 'a', tabInfo: { tab: { signal: new AbortController().signal } } },
-    () => Promise.resolve({ commits: [], nextSkip: 0, exhausted: true, refs: { head: 'main', remotes: [] } }))
+test('history loading uses a progress status and exhausted history has no fake button', async () => {
+  const pending = deferred()
+  const ui = mount('GraphView', { sessionId: 'a', tabInfo: tabInfo() }, request => request.op === 'working'
+    ? Promise.resolve({ staged: [], unstaged: [], untracked: [] })
+    : pending.promise)
+  assert.ok(find(ui.tree, node => node.props.className === 'gg-history-status' && node.props.role === 'status'))
+  assert.ok(find(ui.tree, node => node.props.className === 'gg-spinner'))
+  pending.resolve({ commits: [commit('one')], nextSkip: 1, exhausted: true, refs: { head: 'main', remotes: [] } })
   await ui.settle()
-  const split = find(ui.tree, node => node.type?.name === 'SplitPane')
-  assert.equal(split.props.breakpoint, 1200)
+  assert.equal(find(ui.tree, node => node.props.className === 'gg-more-btn'), undefined)
+  ui.unmount()
+})
+
+test('history renders a full-width table with row-local accordions', async () => {
+  const ui = mount('GraphView',
+    { sessionId: 'a', tabInfo: tabInfo() },
+    request => Promise.resolve(request.op === 'working'
+      ? { staged: [], unstaged: [], untracked: [] }
+      : { commits: [], nextSkip: 0, exhausted: true, refs: { head: 'main', remotes: [] } }))
+  await ui.settle()
+  assert.equal(find(ui.tree, node => node.type?.name === 'SplitPane'), undefined)
+  const heading = find(ui.tree, node => node.props.className === 'gg-section-heading gg-column-heading')
+  assert.deepEqual(nodes(heading).flatMap(node => node.children.filter(child => typeof child === 'string')), ['Graph', 'Description', 'Date', 'Author', 'Commit'])
   ui.unmount()
 })
 
@@ -190,18 +228,70 @@ test('file selection is scoped to session and commit', () => {
   assert.equal(panel(ui.tree).props.params.path, 'a')
 })
 
-test('history refresh keeps selected commit while request is loading and after replacement', async () => {
+test('history refresh keeps the open accordion while replacing commit objects', async () => {
   const pending = []
-  const ui = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo() }, () => { const p = deferred(); pending.push(p); return p.promise })
+  const ui = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo() }, request => {
+    if (request.op === 'working') return Promise.resolve({ staged: [], unstaged: [], untracked: [] })
+    const p = deferred(); pending.push(p); return p.promise
+  })
   pending[0].resolve(page(['a', 'b'])); await ui.settle()
   const row = find(ui.tree, n => n.type?.name === 'CommitRow' && n.props.row.commit.hash === 'b')
   assert.ok(row, nodes(ui.tree).map(n => `${n.type?.name || n.type}: ${n.children.filter(x => typeof x === 'string').join(' ')}`).join('\n'))
   row.props.onSelect(commit('b')); ui.render()
   find(ui.tree, n => n.props['aria-label'] === 'Refresh Git').props.onClick(); ui.render()
-  assert.equal(inspector(ui.tree).props.hash, 'b')
+  assert.equal(accordion(ui.tree).props.hash, 'b')
   pending[1].resolve(page(['new', 'a', 'b'])); await ui.settle()
-  assert.equal(inspector(ui.tree).props.hash, 'b')
+  assert.equal(accordion(ui.tree).props.hash, 'b')
   ui.unmount()
+})
+
+test('open accordion survives graph remount per session without browser storage', async () => {
+  const respond = request => Promise.resolve(request.op === 'working'
+    ? { staged: [], unstaged: [], untracked: [] }
+    : page(['a', 'b']))
+  const first = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo() }, respond)
+  await first.settle()
+  find(first.tree, n => n.type?.name === 'CommitRow' && n.props.row.commit.hash === 'b').props.onSelect(commit('b'))
+  first.render(); first.unmount()
+
+  const restored = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo() }, respond)
+  await restored.settle()
+  assert.equal(accordion(restored.tree).props.hash, 'b')
+  find(restored.tree, n => n.type?.name === 'CommitRow' && n.props.row.commit.hash === 'b').props.onSelect(commit('b'))
+  restored.render(); restored.unmount()
+
+  const collapsed = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo() }, respond)
+  await collapsed.settle()
+  assert.equal(accordion(collapsed.tree), undefined)
+  collapsed.unmount()
+
+  const isolated = mount('GraphView', { sessionId: 'two', tabInfo: tabInfo() }, respond)
+  await isolated.settle()
+  assert.equal(accordion(isolated.tree), undefined)
+  isolated.unmount()
+})
+
+test('older-page accordion restores after remount by reloading the saved depth', async () => {
+  const hashes = Array.from({ length: 135 }, (_, index) => `commit-${index}`)
+  const calls = []
+  const respond = request => {
+    if (request.op === 'working') return Promise.resolve({ staged: [], unstaged: [], untracked: [] })
+    calls.push(request)
+    const commits = hashes.slice(request.skip, request.skip + request.limit).map(commit)
+    return Promise.resolve({ commits, nextSkip: request.skip + commits.length, exhausted: request.skip + commits.length >= hashes.length, refs: {} })
+  }
+  const first = mount('GraphView', { sessionId: 'deep', tabInfo: tabInfo() }, respond)
+  await first.settle()
+  find(first.tree, n => n.type === 'button' && n.children.includes('Load older commits')).props.onClick()
+  await first.settle()
+  find(first.tree, n => n.type?.name === 'CommitRow' && n.props.row.commit.hash === 'commit-130').props.onSelect(commit('commit-130'))
+  first.render(); first.unmount()
+
+  const restored = mount('GraphView', { sessionId: 'deep', tabInfo: tabInfo() }, respond)
+  await restored.settle()
+  assert.equal(accordion(restored.tree).props.hash, 'commit-130')
+  assert.ok(calls.at(-1).limit >= 135)
+  restored.unmount()
 })
 
 test('late diff response cannot overwrite a newer file selection', async () => {
@@ -219,7 +309,10 @@ test('late diff response cannot overwrite a newer file selection', async () => {
 
 test('late history response cannot overwrite newer refresh', async () => {
   const pending = []
-  const ui = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo() }, () => { const p = deferred(); pending.push(p); return p.promise })
+  const ui = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo() }, request => {
+    if (request.op === 'working') return Promise.resolve({ staged: [], unstaged: [], untracked: [] })
+    const p = deferred(); pending.push(p); return p.promise
+  })
   pending[0].resolve(page(['a'])); await ui.settle()
   // Two invocations from the same render also model a queued rapid input.
   const refresh = find(ui.tree, n => n.props['aria-label'] === 'Refresh Git').props.onClick

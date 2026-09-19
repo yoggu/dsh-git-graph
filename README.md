@@ -15,7 +15,8 @@ outside that sidebar.
   the commits. A partially staged path counts once in `n`, while its staged and
   unstaged changes remain separate entries.
 - Clicking a commit or the uncommitted row expands its details directly beneath
-  that row; clicking it again collapses the accordion.
+  that row; clicking it again collapses the accordion. The open row is remembered
+  in memory per DSH session while you visit separate Diff tabs.
 - The accordion places commit metadata and message on the left and a compact,
   hierarchical changed-file tree on the right. Files retain accessible status
   letters and colors, plus per-file added/deleted line counts when Git reports them.

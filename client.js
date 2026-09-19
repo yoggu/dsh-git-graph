@@ -281,83 +281,20 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
      * @returns one entry per distinct branch, tag or detached HEAD.
      */
     function groupRefs(refs, remotes) {
-      const branches = new Map()
-      const others = []
-      // Every local branch name is collected first, so a remote-tracking name
-      // can be matched to its own branch by suffix. Splitting at the first slash
-      // would read `feature/x` as remote `feature` plus branch `x`, and then the
-      // local branch and its remote would never become one badge.
-      const locals = []
-      for (const ref of refs) {
+      const priority = { head: 0, branch: 1, remote: 2, tag: 3, detached: 4 }
+      const seen = new Set()
+      return refs.map(ref => {
         const parsed = parseRef(ref, remotes)
-        if (parsed.kind === 'branch' || parsed.kind === 'head') locals.push(parsed.label)
-      }
-      for (const ref of refs) {
-        const parsed = parseRef(ref, remotes)
-        if (parsed.kind === 'remote') {
-          // `origin/HEAD` is a symbolic pointer, not a branch anyone works on.
-          // Showing it would put a second HEAD badge on a row that has one.
-          if (parsed.label === 'HEAD') continue
-          // A remote entry joins the local branch it is a suffix of; one with no
-          // local counterpart stands on its own, named after its remote.
-          const owner = locals.find(name => name === parsed.label)
-          const key = owner ?? `r:${parsed.label}`
-          const existing = branches.get(key)
-          if (existing === undefined) {
-            branches.set(key, {
-              label: parsed.label,
-              kind: 'branch',
-              isHead: false,
-              remotes: parsed.remote === null ? [] : [parsed.remote],
-            })
-            continue
-          }
-          if (parsed.remote !== null && !existing.remotes.includes(parsed.remote)) {
-            existing.remotes.push(parsed.remote)
-          }
-          continue
-        }
-        if (parsed.kind === 'branch' || parsed.kind === 'head') {
-          const existing = branches.get(parsed.label)
-          if (existing === undefined) {
-            branches.set(parsed.label, {
-              label: parsed.label,
-              kind: parsed.kind === 'head' ? 'head' : 'branch',
-              isHead: parsed.kind === 'head',
-              remotes: [],
-            })
-            continue
-          }
-          if (parsed.kind === 'head') {
-            existing.isHead = true
-            existing.kind = 'head'
-          }
-          continue
-        }
-        others.push(parsed)
-      }
-      const merged = [...branches.values()].map((entry) => {
-        const remotes = entry.remotes.length === 0 ? ''
-          : entry.remotes.length === 1 ? ` [${entry.remotes[0]}]`
-            : ` [${entry.remotes.length} remotes]`
+        const text = parsed.kind === 'remote' && parsed.remote ? `${parsed.remote}/${parsed.label}` : parsed.label
         return {
-          key: `b:${entry.label}`,
-          kind: entry.isHead ? 'head' : 'branch',
-          text: entry.isHead ? `HEAD \u2192 ${entry.label}${remotes}` : `${entry.label}${remotes}`,
-          title: entry.isHead
-            ? `HEAD is at ${entry.label}${entry.remotes.length > 0 ? ` (${entry.remotes.join(', ')})` : ''}`
-            : `${entry.label}${entry.remotes.length > 0 ? ` \u2014 ${entry.remotes.join(', ')}` : ''}`,
-        }
-      })
-      return [
-        ...merged,
-        ...others.map(parsed => ({
-          key: `o:${parsed.label}`,
+          key: `${parsed.kind}:${text}`,
           kind: parsed.kind,
-          text: parsed.label,
-          title: parsed.kind === 'tag' ? `tag ${parsed.label}` : parsed.label,
-        })),
-      ]
+          text,
+          title: parsed.kind === 'head' ? `HEAD is at ${text}` : parsed.kind === 'tag' ? `tag ${text}` : text,
+        }
+      }).filter(ref => ref.text !== 'HEAD' || ref.kind !== 'remote')
+        .filter(ref => seen.has(ref.key) ? false : (seen.add(ref.key), true))
+        .sort((a, b) => (priority[a.kind] ?? 9) - (priority[b.kind] ?? 9))
     }
 
     /**
@@ -372,7 +309,7 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
         key: ref.key,
         className: `gg-ref gg-ref-${ref.kind}`,
         title: ref.title,
-      }, ref.text)))
+      }, h('span', { className: 'gg-ref-icon' }, h(GitIcon, { name: 'branch', size: 13 })), h('span', { className: 'gg-ref-name' }, ref.text))))
     }
 
     // BEGIN GRAPH CANVAS
@@ -454,7 +391,7 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
         'aria-controls': selected ? `gg-accordion-${commit.hash}` : undefined,
         tabIndex: selected ? 0 : -1,
         title: `${commit.hash}\n${commit.subject}\n${commit.authorName} — ${stamp}`,
-        style: { '--gg-lane-width': `${indent}px` },
+        style: { '--gg-lane-width': `${indent}px`, '--gg-ref-color': commit.synthetic ? '#8b949e' : laneColor(row.slot) },
         onClick: (event) => {
           if (event.metaKey || event.ctrlKey) { onCompare(commit); return }
           onSelect(commit)
@@ -471,8 +408,9 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
         },
       },
       h('span', { className: 'gg-row-body' },
-        h('span', { className: 'gg-subject gg-description', title: commit.subject }, commit.subject),
-        grouped.length > 0 ? h(RefBadges, { refs: grouped }) : null,
+        h('span', { className: 'gg-description' },
+          grouped.length > 0 ? h(RefBadges, { refs: grouped }) : null,
+          h('span', { className: 'gg-subject', title: commit.subject }, commit.subject)),
         h('span', { className: 'gg-row-meta' },
           h('span', { className: 'gg-author' }, commit.synthetic ? `${commit.count ?? 0} files` : commit.authorName),
           h('span', { className: 'gg-date' }, commit.synthetic ? '' : stamp),
@@ -602,9 +540,9 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
                 onSelect: openCommit, onCompare: openCommit,
                 onContextMenu: (event, commit) => setMenu({ x: event.clientX, y: event.clientY, commit }),
               })))),
-            busy && state.commits.length === 0 ? h('div', { className: 'gg-empty', role: 'status' }, 'Reading the repository…') : null,
+            busy ? h('div', { className: 'gg-history-status', role: 'status' }, h('span', { className: 'gg-spinner', 'aria-hidden': 'true' }), h('span', null, state.commits.length ? 'Loading older history…' : 'Loading history…')) : null,
             !busy && !error && state.commits.length === 0 ? h('div', { className: 'gg-empty' }, 'No commits yet. Review uncommitted files in Changes.') : null,
-            state.commits.length > 0 ? h('button', { className: 'gg-more-btn', disabled: busy || state.exhausted, onClick: () => load(true) }, busy ? 'Loading…' : state.exhausted ? 'All commits loaded' : 'Load older commits') : null)),
+            state.commits.length > 0 && !busy && !state.exhausted ? h('button', { className: 'gg-more-btn', onClick: () => load(true) }, 'Load older commits') : null)),
         second: selected ? h(CommitInspector, { hash: selected, sessionId, signal, revision, onSelect: setSelected }) : h('div', { className: 'gg-empty' }, 'Select a commit to inspect its changes.'),
       })
       return h('div', { className: 'gg-root gg-workbench' },
@@ -621,9 +559,43 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
         menu ? h(ContextMenu, { menu, markers: [], onClose: () => setMenu(null), onOpenCommit: openCommit, onFlash: flash }) : null)
     }
 
-    const ACCORDION_H = 300
+    const ACCORDION_H = 248
+    const ACCORDION_MIN_H = 180
+    const ACCORDION_MAX_H = 720
+    const ACCORDION_SPLIT = 50
+    // The graph tab can unmount while a file's separate Diff tab is active.
+    // Keep only the open row identity in plugin memory, scoped by DSH session;
+    // this survives tab switches without leaking into browser-persistent storage.
+    const openAccordionBySession = new Map()
+    const accordionLayoutBySession = new Map()
 
-    function CommitAccordion({ hash, sessionId, signal, revision = 0, onSelect, tabInfo }) {
+    function AccordionSurface({ id, label, height, split, onHeightChange, onSplitChange, first, second, state = false, error = false }) {
+      const ref = React.useRef(null)
+      const resizeHeight = event => {
+        if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
+        const rect = ref.current.getBoundingClientRect()
+        onHeightChange(Math.max(ACCORDION_MIN_H, Math.min(ACCORDION_MAX_H, event.clientY - rect.top)))
+      }
+      const resizeSplit = event => {
+        if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
+        const rect = ref.current.getBoundingClientRect()
+        onSplitChange(Math.max(25, Math.min(75, 100 * (event.clientX - rect.left) / rect.width)))
+      }
+      const capture = event => { if (event.button === 0) { event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId) } }
+      const release = event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId) }
+      return h('div', { ref, id, className: `gg-accordion${state ? ` gg-accordion-state${error ? ' is-error' : ''}` : ''}`, role: state ? (error ? 'alert' : 'status') : undefined, 'aria-label': label,
+        style: { '--gg-accordion-height': `${height}px`, '--gg-accordion-split': `${split}%` } },
+        state ? h('div', { className: 'gg-accordion-state-content' }, first) : first,
+        !state ? h('div', { className: 'gg-accordion-column-resizer', role: 'separator', tabIndex: 0, 'aria-label': 'Resize accordion columns', 'aria-orientation': 'vertical', 'aria-valuemin': 25, 'aria-valuemax': 75, 'aria-valuenow': Math.round(split),
+          title: 'Drag to resize columns · Double-click to reset', onDoubleClick: () => onSplitChange(ACCORDION_SPLIT), onPointerDown: capture, onPointerMove: resizeSplit, onPointerUp: release, onPointerCancel: release,
+          onKeyDown: event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); onSplitChange(Math.max(25, Math.min(75, split + (event.key === 'ArrowLeft' ? -3 : 3)))) } } }) : null,
+        state ? null : second,
+        h('div', { className: 'gg-accordion-height-resizer', role: 'separator', tabIndex: 0, 'aria-label': 'Resize accordion height', 'aria-orientation': 'horizontal', 'aria-valuemin': ACCORDION_MIN_H, 'aria-valuemax': ACCORDION_MAX_H, 'aria-valuenow': Math.round(height),
+          title: 'Drag down to resize accordion · Double-click to reset', onDoubleClick: () => onHeightChange(ACCORDION_H), onPointerDown: capture, onPointerMove: resizeHeight, onPointerUp: release, onPointerCancel: release,
+          onKeyDown: event => { if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); onHeightChange(Math.max(ACCORDION_MIN_H, Math.min(ACCORDION_MAX_H, height + (event.key === 'ArrowUp' ? -20 : 20)))) } } }))
+    }
+
+    function CommitAccordion({ hash, sessionId, signal, revision = 0, onSelect, tabInfo, height, split, onHeightChange, onSplitChange }) {
       const [state, setState] = React.useState({ detail: null, error: null })
       React.useEffect(() => {
         let active = true
@@ -633,39 +605,36 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
         return () => { active = false }
       }, [hash, sessionId, signal, revision])
       const detail = state.detail?.hash === hash ? state.detail : null
-      if (state.error) return h('div', { className: 'gg-error', role: 'alert' }, state.error)
-      if (!detail) return h('div', { className: 'gg-empty', role: 'status' }, 'Loading commit…')
+      if (state.error) return h(AccordionSurface, { id: `gg-accordion-${hash}`, label: 'Commit details unavailable', height, split, onHeightChange, onSplitChange, state: true, error: true,
+        first: h(React.Fragment, null, h('strong', null, 'Unable to load commit details'), h('span', null, state.error)) })
+      if (!detail) return h(AccordionSurface, { id: `gg-accordion-${hash}`, label: 'Loading commit details', height, split, onHeightChange, onSplitChange, state: true,
+        first: h(React.Fragment, null, h('span', { className: 'gg-spinner', 'aria-hidden': 'true' }), h('span', null, 'Loading commit details…')) })
       const openFile = file => openDiffTab(tabInfo, { mode: 'commits', base: detail.parents[0] ?? EMPTY_TREE, head: detail.hash, path: file.path, oldPath: file.oldPath })
-      return h('div', { id: `gg-accordion-${hash}`, className: 'gg-accordion', 'aria-label': 'Commit details' },
-        h('section', { className: 'gg-accordion-meta' },
-          h('div', { className: 'gg-detail-label' }, 'Commit'),
-          h('div', { className: 'gg-accordion-subject' }, detail.message.split('\n')[0]),
-          h('p', { className: 'gg-msg' }, detail.message),
+      return h(AccordionSurface, { id: `gg-accordion-${hash}`, label: 'Commit details', height, split, onHeightChange, onSplitChange,
+        first: h('section', { className: 'gg-accordion-meta' },
           h('dl', { className: 'gg-meta' },
-            h('dt', null, 'Hash'), h('dd', { className: 'gg-mono' }, detail.hash),
-            h('dt', null, 'Author'), h('dd', null, `${detail.authorName} <${detail.authorEmail}>`),
-            h('dt', null, 'Date'), h('dd', null, formatDate(detail.authorDate)),
-            h('dt', null, 'Committer'), h('dd', null, `${detail.committerName} <${detail.committerEmail}>`),
-            h('dt', null, 'Committed'), h('dd', null, formatDate(detail.committerDate)),
-            h('dt', null, 'Parents'), h('dd', null, detail.parents.length ? detail.parents.map(parent => h('button', { key: parent, className: 'gg-link', onClick: () => onSelect?.(parent) }, parent.slice(0, 10))).reduce((all, item, i) => i ? [...all, ' ', item] : [item], []) : 'None')),
-          h('button', { className: 'gg-link', onClick: () => copyText(detail.hash) }, 'Copy hash')),
-        h('section', { className: 'gg-accordion-files' },
-          h('div', { className: 'gg-detail-label' }, `Changed files · ${detail.files.length}`),
-          h(ChangedTree, { files: detail.files, onOpen: openFile })))
+            h('dt', null, 'Commit:'), h('dd', { className: 'gg-mono' }, detail.hash),
+            h('dt', null, 'Parents:'), h('dd', null, detail.parents.length ? detail.parents.map(parent => h('button', { key: parent, className: 'gg-link', onClick: () => onSelect?.(parent) }, parent.slice(0, 16))).reduce((all, item, i) => i ? [...all, ' ', item] : [item], []) : 'None'),
+            h('dt', null, 'Author:'), h('dd', null, `${detail.authorName} <${detail.authorEmail}>`),
+            h('dt', null, 'Author Date:'), h('dd', null, formatDate(detail.authorDate)),
+            h('dt', null, 'Committer:'), h('dd', null, `${detail.committerName} <${detail.committerEmail}>`),
+            h('dt', null, 'Committer Date:'), h('dd', null, formatDate(detail.committerDate))),
+          h('p', { className: 'gg-accordion-message' }, detail.message)),
+        second: h('section', { className: 'gg-accordion-files' }, h(ChangedTree, { files: detail.files, onOpen: openFile })) })
     }
 
-    function WorkingAccordion({ files = [], tabInfo }) {
+    function WorkingAccordion({ files = [], tabInfo, height, split, onHeightChange, onSplitChange }) {
       const openFile = file => openDiffTab(tabInfo, { mode: 'working', base: 'HEAD', head: '', path: file.path, oldPath: file.oldPath, group: file.group, staged: file.group === 'staged' })
       const groups = ['staged', 'unstaged', 'untracked']
-      return h('div', { id: 'gg-accordion-WORKTREE', className: 'gg-accordion', 'aria-label': 'Uncommitted changes' },
-        h('section', { className: 'gg-accordion-meta' }, h('div', { className: 'gg-detail-label' }, 'Working tree'),
-          h('div', { className: 'gg-accordion-subject' }, 'Uncommitted changes'),
-          h('p', { className: 'gg-msg' }, 'Read-only snapshot of staged, unstaged and untracked files.')),
-        h('section', { className: 'gg-accordion-files' }, groups.map(group => {
+      return h(AccordionSurface, { id: 'gg-accordion-WORKTREE', label: 'Uncommitted changes', height, split, onHeightChange, onSplitChange,
+        first: h('section', { className: 'gg-accordion-meta' },
+          h('dl', { className: 'gg-meta' }, h('dt', null, 'Status:'), h('dd', null, 'Uncommitted changes'), h('dt', null, 'Files:'), h('dd', null, files.length)),
+          h('p', { className: 'gg-accordion-message' }, 'Read-only snapshot of staged, unstaged and untracked files.')),
+        second: h('section', { className: 'gg-accordion-files gg-accordion-working' }, groups.map(group => {
           const entries = files.filter(file => file.group === group)
           if (!entries.length) return null
-          return h('div', { key: group, className: 'gg-working-group' }, h('div', { className: 'gg-detail-label' }, `${group[0].toUpperCase()}${group.slice(1)} · ${entries.length}`), h(ChangedTree, { files: entries, onOpen: openFile }))
-        })))
+          return h('div', { key: group, className: 'gg-working-group' }, h('div', { className: 'gg-working-title' }, `${group[0].toUpperCase()}${group.slice(1)} (${entries.length})`), h(ChangedTree, { files: entries, onOpen: openFile }))
+        })) })
     }
 
     /** Accordion history: full-width graph rows, with one row-local expansion. */
@@ -673,8 +642,23 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
       const signal = tabInfo.tab.signal
       const [state, setState] = React.useState({ commits: [], refs: null, exhausted: false, nextSkip: 0 })
       const [working, setWorking] = React.useState({ files: [], error: null })
-      const [selected, setSelected] = React.useState(null)
-      const [mode, setMode] = React.useState('history')
+      const restoredAccordion = React.useRef(openAccordionBySession.get(sessionId))
+      const restoredLayout = React.useRef(accordionLayoutBySession.get(sessionId) ?? { height: ACCORDION_H, split: ACCORDION_SPLIT })
+      const [accordionHeight, setAccordionHeightState] = React.useState(restoredLayout.current.height)
+      const [accordionSplit, setAccordionSplitState] = React.useState(restoredLayout.current.split)
+      const setAccordionHeight = value => { const next = Math.max(ACCORDION_MIN_H, Math.min(ACCORDION_MAX_H, value)); accordionLayoutBySession.set(sessionId, { height: next, split: accordionSplit }); setAccordionHeightState(next) }
+      const setAccordionSplit = value => { const next = Math.max(25, Math.min(75, value)); accordionLayoutBySession.set(sessionId, { height: accordionHeight, split: next }); setAccordionSplitState(next) }
+      React.useEffect(() => { const next = accordionLayoutBySession.get(sessionId) ?? { height: ACCORDION_H, split: ACCORDION_SPLIT }; setAccordionHeightState(next.height); setAccordionSplitState(next.split) }, [sessionId])
+      const restoreCount = React.useRef(Math.max(120, Math.min(600, restoredAccordion.current?.loadedCount ?? 0)))
+      const [selected, setSelected] = React.useState(() => restoredAccordion.current?.hash ?? null)
+      const selectAccordion = React.useCallback(value => {
+        setSelected(current => {
+          const next = typeof value === 'function' ? value(current) : value
+          if (next === null) openAccordionBySession.delete(sessionId)
+          else openAccordionBySession.set(sessionId, { hash: next, loadedCount: Math.max(state.commits.length, openAccordionBySession.get(sessionId)?.loadedCount ?? 0) })
+          return next
+        })
+      }, [sessionId, state.commits.length])
       const [error, setError] = React.useState(null)
       const [busy, setBusy] = React.useState(false)
       const [revision, setRevision] = React.useState(0)
@@ -691,13 +675,13 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
         const id = ++request.current
         setBusy(true); setError(null)
         try {
-          const result = await call({ op: 'commits', sessionId, skip: append ? state.nextSkip : 0, limit: append ? 120 : Math.max(120, Math.min(600, state.commits.length)) }, signal)
-          while (!append && !result.exhausted && result.commits.length < state.commits.length) {
-            if (request.current !== id || signal.aborted) return
-            const page = await call({ op: 'commits', sessionId, skip: result.nextSkip, limit: Math.min(600, state.commits.length - result.commits.length) }, signal)
-            result.commits.push(...page.commits); result.nextSkip = page.nextSkip; result.exhausted = page.exhausted || page.commits.length === 0
-          }
+          const targetCount = append ? 120 : Math.max(120, Math.min(600, Math.max(state.commits.length, restoreCount.current)))
+          const result = await call({ op: 'commits', sessionId, skip: append ? state.nextSkip : 0, limit: targetCount }, signal)
           if (request.current !== id || signal.aborted) return
+          const loadedCount = append ? state.commits.length + result.commits.length : result.commits.length
+          const saved = openAccordionBySession.get(sessionId)
+          if (saved?.hash) openAccordionBySession.set(sessionId, { ...saved, loadedCount: Math.max(saved.loadedCount ?? 0, loadedCount) })
+          restoreCount.current = Math.max(restoreCount.current, loadedCount)
           setState(current => ({ ...result, refs: result.refs ?? current.refs, commits: append ? [...current.commits, ...result.commits] : result.commits }))
           /* selection stays closed until the reader clicks a row */
         } catch (err) { if (request.current === id && err.name !== 'AbortError') setError(String(err.message ?? err)) }
@@ -711,28 +695,28 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
       const selectedIndex = commits.findIndex(commit => commit.hash === selected)
       const expanded = selectedIndex >= 0
       const flash = text => { setNotice(text); clearTimeout(noticeTimer.current); noticeTimer.current = setTimeout(() => setNotice(null), 1800) }
-      const toggle = commit => setSelected(current => current === commit.hash ? null : commit.hash)
+      const toggle = commit => selectAccordion(current => current === commit.hash ? null : commit.hash)
+      const laneWidth = Math.max(100, LANE_X0 * 2 + graph.columnCount * LANE_W)
       const rows = graph.rows.map((row, index) => h('div', { key: row.commit.hash, className: 'gg-row-stack' },
-        h(CommitRow, { row, indent: LANE_X0 * 2 + graph.columnCount * LANE_W, dense: false, remotes: state.refs?.remotes ?? [], selected: selected === row.commit.hash,
+        h(CommitRow, { row, indent: laneWidth, dense: false, remotes: state.refs?.remotes ?? [], selected: selected === row.commit.hash,
           onSelect: toggle, onCompare: toggle, onContextMenu: (event, commit) => setMenu({ x: event.clientX, y: event.clientY, commit }) }),
-        selected === row.commit.hash ? (row.commit.synthetic ? h(WorkingAccordion, { files: working.files, tabInfo }) : h(CommitAccordion, { hash: row.commit.hash, sessionId, signal, revision, tabInfo, onSelect: hash => setSelected(hash) })) : null))
-      const totalHeight = graph.rows.length * ROW_H + (expanded ? ACCORDION_H : 0)
+        selected === row.commit.hash ? (row.commit.synthetic ? h(WorkingAccordion, { files: working.files, tabInfo, height: accordionHeight, split: accordionSplit, onHeightChange: setAccordionHeight, onSplitChange: setAccordionSplit }) : h(CommitAccordion, { hash: row.commit.hash, sessionId, signal, revision, tabInfo, onSelect: selectAccordion, height: accordionHeight, split: accordionSplit, onHeightChange: setAccordionHeight, onSplitChange: setAccordionSplit })) : null))
+      const totalHeight = graph.rows.length * ROW_H + (expanded ? accordionHeight : 0)
       return h('div', { className: 'gg-root gg-workbench' },
-        h('div', { className: 'gg-toolbar' }, h('div', { className: 'gg-modes', role: 'group', 'aria-label': 'Git view' }, ['history', 'changes'].map(value => h('button', { key: value, className: `gg-mode${mode === value ? ' is-active' : ''}`, 'aria-pressed': mode === value, onClick: () => setMode(value) }, value === 'history' ? 'History' : 'Changes'))),
-          h('span', { className: 'gg-repo', title: state.refs?.head ?? '' }, state.refs?.head ?? 'Git'), h('span', { className: 'gg-readonly' }, 'Read-only'),
-          h('button', { className: 'gg-icon-btn', 'aria-label': 'Refresh Git', title: 'Refresh history and working changes', disabled: busy, onClick: () => { load(); loadWorking(); setRevision(value => value + 1) } }, h(GitIcon, { name: 'refresh' }))),
         notice ? h('div', { className: 'gg-notice', role: 'status' }, notice) : null,
-        h('div', { className: 'gg-mode-content', hidden: mode !== 'history' },
-          h('section', { className: 'gg-root gg-history', 'aria-label': 'Commit history' },
-            h('div', { className: 'gg-section-heading gg-column-heading' }, h('span', null, 'Graph'), h('span', null, 'Description'), h('span', null, 'Date'), h('span', null, 'Author'), h('span', null, 'Commit')),
-            error ? h('div', { className: 'gg-error', role: 'alert' }, error) : null,
-            h('div', { ref: graphRef, className: 'gg-graph', 'aria-busy': busy, onKeyDown: event => {
-              if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
-              event.preventDefault(); const index = selectedIndex < 0 ? 0 : selectedIndex; const next = event.key === 'Home' ? 0 : event.key === 'End' ? commits.length - 1 : Math.max(0, Math.min(commits.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1))); const commit = commits[next]
-              if (commit) { toggle(commit); graphRef.current.querySelectorAll('.gg-row')[next]?.focus({ preventScroll: true }); graphRef.current.querySelectorAll('.gg-row')[next]?.scrollIntoView({ block: 'nearest' }) }
-            } }, h('div', { className: 'gg-graph-inner', style: { height: totalHeight } }, h(GraphCanvas, { ...graph, height: totalHeight, expandedRow: expanded ? selectedIndex : -1, expandedHeight: expanded ? ACCORDION_H : 0 }), h('div', { className: 'gg-rows' }, rows)),
-            busy && !state.commits.length ? h('div', { className: 'gg-empty', role: 'status' }, 'Reading the repository…') : null, !busy && !error && !state.commits.length ? h('div', { className: 'gg-empty' }, 'No commits yet. Review uncommitted files above.') : null, state.commits.length ? h('button', { className: 'gg-more-btn', disabled: busy || state.exhausted, onClick: () => load(true) }, busy ? 'Loading…' : state.exhausted ? 'All commits loaded' : 'Load older commits') : null)),
-        h('div', { className: 'gg-mode-content', hidden: mode !== 'changes' }, h(ChangesView, { tabInfo, sessionId, revision })),
+        h('section', { className: 'gg-root gg-history', style: { '--gg-lane-width': `${laneWidth}px` }, 'aria-label': 'Commit history' },
+          h('div', { className: 'gg-section-heading gg-column-heading' },
+            h('span', null, h('button', { className: 'gg-column-refresh', 'aria-label': 'Refresh Git', title: 'Refresh history and working changes', disabled: busy, onClick: () => { load(); loadWorking(); setRevision(value => value + 1) } }, 'Graph')),
+            h('span', null, 'Description'), h('span', null, 'Date'), h('span', null, 'Author'), h('span', null, 'Commit')),
+          error ? h('div', { className: 'gg-error', role: 'alert' }, error) : null,
+          h('div', { ref: graphRef, className: 'gg-graph', style: { '--gg-lane-width': `${laneWidth}px` }, 'aria-busy': busy, onKeyDown: event => {
+            if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+            event.preventDefault(); const index = selectedIndex < 0 ? 0 : selectedIndex; const next = event.key === 'Home' ? 0 : event.key === 'End' ? commits.length - 1 : Math.max(0, Math.min(commits.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1))); const commit = commits[next]
+            if (commit) { toggle(commit); graphRef.current.querySelectorAll('.gg-row')[next]?.focus({ preventScroll: true }); graphRef.current.querySelectorAll('.gg-row')[next]?.scrollIntoView({ block: 'nearest' }) }
+          } }, h('div', { className: 'gg-graph-inner', style: { height: totalHeight } }, h(GraphCanvas, { ...graph, height: totalHeight, expandedRow: expanded ? selectedIndex : -1, expandedHeight: expanded ? accordionHeight : 0 }), h('div', { className: 'gg-rows' }, rows)),
+          busy ? h('div', { className: 'gg-history-status', role: 'status' }, h('span', { className: 'gg-spinner', 'aria-hidden': 'true' }), h('span', null, state.commits.length ? 'Loading older history…' : 'Loading history…')) : null,
+          !busy && !error && !state.commits.length ? h('div', { className: 'gg-empty' }, 'No commits yet. Review uncommitted files above.') : null,
+          state.commits.length > 0 && !busy && !state.exhausted ? h('button', { className: 'gg-more-btn', onClick: () => load(true) }, 'Load older commits') : null),
         menu ? h(ContextMenu, { menu, markers: [], onClose: () => setMenu(null), onOpenCommit: toggle, onFlash: flash }) : null))
     }
 
@@ -899,9 +883,39 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
     }
     // END DIFF UI PURE HELPERS
 
+    /** Compact themed dropdown used by the diff toolbar instead of a native select. */
+    function CompactDropdown({ value, options, onChange, label, title, className = '' }) {
+      const [open, setOpen] = React.useState(false)
+      const root = React.useRef(null)
+      const selected = options.find(option => option.value === value) ?? options[0]
+      React.useEffect(() => {
+        if (!open) return undefined
+        const closeOutside = event => { if (!root.current?.contains(event.target)) setOpen(false) }
+        const closeEscape = event => { if (event.key === 'Escape') setOpen(false) }
+        document.addEventListener('pointerdown', closeOutside)
+        document.addEventListener('keydown', closeEscape)
+        return () => { document.removeEventListener('pointerdown', closeOutside); document.removeEventListener('keydown', closeEscape) }
+      }, [open])
+      const choose = next => { onChange(next); setOpen(false) }
+      const move = delta => {
+        const index = Math.max(0, options.findIndex(option => option.value === value))
+        choose(options[(index + delta + options.length) % options.length].value)
+      }
+      return h('div', { ref: root, className: `gg-du-dropdown ${className}${open ? ' is-open' : ''}` },
+        h('button', { type: 'button', className: 'gg-du-dropdown-trigger', 'aria-label': label, 'aria-haspopup': 'listbox', 'aria-expanded': open, title,
+          onClick: () => setOpen(current => !current), onKeyDown: event => {
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); move(event.key === 'ArrowDown' ? 1 : -1) }
+            else if (event.key === 'Escape') setOpen(false)
+          } }, h('span', null, selected?.label ?? value), h('span', { className: 'gg-du-dropdown-chevron', 'aria-hidden': 'true' }, '⌄')),
+        open ? h('div', { className: 'gg-du-dropdown-menu', role: 'listbox', 'aria-label': label }, options.map(option => h('button', {
+          key: option.value, type: 'button', role: 'option', className: `gg-du-dropdown-option${option.value === value ? ' is-selected' : ''}`, 'aria-selected': option.value === value,
+          onClick: () => choose(option.value),
+        }, h('span', { className: 'gg-du-dropdown-check', 'aria-hidden': 'true' }, option.value === value ? '✓' : ''), h('span', null, option.label)))) : null)
+    }
+
     /** Shared inline or standalone diff. Optional params.group identifies untracked files. */
     function DiffPanel({ sessionId, signal, params = {}, revision = 0 }) {
-      const [wrap, setWrap] = React.useState(false)
+      const [wrap, setWrap] = React.useState(true)
       const [context, setContext] = React.useState(3)
       const [syntax, setSyntax] = React.useState(true)
       const [layoutMode, setLayoutMode] = React.useState('auto')
@@ -958,6 +972,7 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
       // Bound browser node creation even for a patch made of extremely short lines.
       const visibleRows = parsed.rows.slice(0, 12000)
       const language = GitSyntax.languageForPath(path)
+      const languageLabel = language ? ({ javascript: 'JS', typescript: 'TS', python: 'PY', markdown: 'MD', json: 'JSON', css: 'CSS', html: 'HTML' }[language] || language.toUpperCase().slice(0, 4)) : 'TXT'
       const highlights = React.useMemo(() => GitSyntax.highlightRows(parsed.rows.slice(0, 12000), path, syntax), [parsed, path, syntax])
       const visibleHunks = parsed.hunks.filter(index => index < visibleRows.length)
       const metadata = parsed.rows.filter(row => row.kind === 'meta').map(row => row.text).join('\n')
@@ -1008,16 +1023,16 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
       return h('section', { ref: panelRef, className: 'gg-du-panel', 'aria-label': title ? `Diff for ${title}` : 'Diff preview' },
         h('div', { className: 'gg-du-title', title }, title || 'Diff preview'),
         h('div', { className: 'gg-du-controls' },
-          h('button', { type: 'button', className: 'gg-du-button', 'aria-pressed': wrap, onClick: () => setWrap(value => !value) }, 'Wrap'),
-          h('label', { className: 'gg-du-context' }, 'Layout ', h('select', { value: layoutMode, onChange: event => setLayoutMode(event.target.value), 'aria-label': 'Diff layout' }, [['auto', 'Auto'], ['split', 'Split'], ['unified', 'Combined']].map(([value, label]) => h('option', { key: value, value }, label)))),
-          h('button', { type: 'button', className: 'gg-du-button', disabled: !language, 'aria-label': 'Syntax highlighting', 'aria-pressed': syntax && !!highlights,
-            title: !language ? 'Plain text: unsupported file type' : highlights ? `${language} highlighting — shown diff context only` : 'Highlighting off or diff exceeds the 200 KB / 5,000 line limit', onClick: () => setSyntax(value => !value) }, language || 'Plain text'),
-          h('label', { className: 'gg-du-context' }, 'Context ', h('select', { value: context, onChange: event => setContext(Number(event.target.value)), 'aria-label': 'Context lines' }, [0, 3, 10, 25, 50, 100].map(value => h('option', { key: value, value }, value)))),
+          h('button', { type: 'button', className: 'gg-du-button gg-du-icon-button', 'aria-label': 'Toggle word wrap', title: wrap ? 'Disable word wrap' : 'Enable word wrap', 'aria-pressed': wrap, onClick: () => setWrap(value => !value) }, h(GitIcon, { name: 'wrap', size: 14 })),
+          h(CompactDropdown, { className: 'gg-du-layout-select', value: layoutMode, onChange: setLayoutMode, label: 'Diff layout', title: 'Diff layout', options: [{ value: 'auto', label: 'Auto view' }, { value: 'split', label: 'Side by side' }, { value: 'unified', label: 'Inline' }] }),
+          h('button', { type: 'button', className: 'gg-du-button gg-du-language', disabled: !language, 'aria-label': 'Syntax highlighting', 'aria-pressed': syntax && !!highlights,
+            title: !language ? 'Plain text: unsupported file type' : highlights ? `${language} highlighting — shown diff context only` : 'Highlighting off or diff exceeds the 200 KB / 5,000 line limit', onClick: () => setSyntax(value => !value) }, languageLabel),
+          h(CompactDropdown, { className: 'gg-du-context-select', value: context, onChange: setContext, label: 'Context lines', title: 'Unchanged lines shown around each change', options: [0, 3, 10, 25, 50, 100].map(value => ({ value, label: `Context: ${value}` })) }),
           h('span', { className: 'gg-du-counts', title: cut ? 'Counts in returned partial patch' : 'Changed lines' },
             h('span', { className: 'gg-du-added' }, `+${parsed.additions}`), ' ', h('span', { className: 'gg-du-deleted' }, `−${parsed.deletions}`)),
-          h('button', { type: 'button', className: 'gg-du-button', disabled: hunk <= 0, onClick: () => jump(-1), 'aria-label': 'Previous hunk' }, '↑ Hunk'),
-          h('button', { type: 'button', className: 'gg-du-button', disabled: !visibleHunks.length || hunk >= visibleHunks.length - 1, onClick: () => jump(1), 'aria-label': 'Next hunk' }, '↓ Hunk'),
-          visibleHunks.length ? h('span', { className: 'gg-du-position' }, `${hunk + 1}/${visibleHunks.length}`) : null),
+          h('button', { type: 'button', className: 'gg-du-button gg-du-icon-button', disabled: hunk <= 0, onClick: () => jump(-1), 'aria-label': 'Previous hunk', title: 'Previous change' }, '↑'),
+          h('button', { type: 'button', className: 'gg-du-button gg-du-icon-button', disabled: !visibleHunks.length || hunk >= visibleHunks.length - 1, onClick: () => jump(1), 'aria-label': 'Next hunk', title: 'Next change' }, '↓'),
+          visibleHunks.length ? h('span', { className: 'gg-du-position', title: 'Current change' }, `${hunk + 1}/${visibleHunks.length}`) : null),
         h('div', { className: 'gg-du-summary' }, mode === 'working' ? (untracked ? 'Untracked' : staged ? 'Staged · HEAD → index' : 'Unstaged · index → working tree') : `${String(params.base ?? '').slice(0, 10)} → ${String(params.head ?? '').slice(0, 10)}`),
         metadata ? h('details', { className: 'gg-du-metadata', key },
           h('summary', null, 'Diff metadata'), h('pre', null, metadata)) : null,
@@ -1068,8 +1083,15 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
       const added = file.added ?? file.additions ?? file.insertions
       const removed = file.removed ?? file.deletions ?? file.deletionsCount
       return Number.isFinite(Number(added)) || Number.isFinite(Number(removed))
-        ? h('span', { className: 'gg-file-counts' }, Number.isFinite(Number(added)) ? `+${Number(added)}` : '', ' ', Number.isFinite(Number(removed)) ? `−${Number(removed)}` : '')
+        ? h('span', { className: 'gg-file-counts' }, Number.isFinite(Number(added)) ? h('span', { className: 'gg-file-added' }, `+${Number(added)}`) : null, ' ', Number.isFinite(Number(removed)) ? h('span', { className: 'gg-file-removed' }, `−${Number(removed)}`) : null)
         : null
+    }
+
+    function FileIcon({ path = '', folder = false }) {
+      const extension = folder ? 'folder' : (String(path).split('.').pop()?.toLowerCase() || 'file')
+      return h('svg', { className: `gg-file-icon gg-file-icon-${extension}`, viewBox: '0 0 16 16', 'aria-hidden': 'true' }, folder
+        ? h('path', { d: 'M1.5 3.5h5l1.35 1.5h6.65v8.5h-13z' })
+        : h(React.Fragment, null, h('path', { d: 'M3 1.5h6.5l3.5 3.5v9.5H3z' }), h('path', { className: 'gg-file-icon-fold', d: 'M9.5 1.5V5H13' })))
     }
 
     function ChangedTree({ files = [], onOpen, empty = 'No changed files.' }) {
@@ -1080,15 +1102,15 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
         return [...folders.map(folder => {
           const compact = compactTreeFolder(folder)
           return h('div', { key: `${prefix}${compact.name}/`, className: 'gg-tree-folder' },
-            h('div', { className: 'gg-tree-folder-name', title: `${prefix}${compact.name}/` }, h('span', { className: 'gg-tree-chevron' }, '▾'), compact.name),
+            h('div', { className: 'gg-tree-folder-name', title: `${prefix}${compact.name}/` }, h('span', { className: 'gg-tree-chevron' }, '▾'), h(FileIcon, { path: compact.name, folder: true }), h('span', null, compact.name)),
             h('div', { className: 'gg-tree-children' }, renderNode(compact.node, `${prefix}${compact.name}/`)))
         }),
         ...entries.map(file => {
           const status = fileStatus(file)
           const title = file.oldPath ? `${file.oldPath} → ${file.path}` : file.path
           return h('button', { key: `${prefix}${file.path}:${file.group || ''}`, type: 'button', className: 'gg-file gg-tree-file', title,
-            onClick: () => onOpen?.(file),
-          }, h('span', { className: `gg-status gg-status-${status.code}`, 'data-status': status.code, title: status.title }, status.code),
+            'data-status': status.code, onClick: () => onOpen?.(file),
+          }, h(FileIcon, { path: file.path }), h('span', { className: 'gg-sr-only' }, `${status.title}: `),
           h('span', { className: 'gg-path' }, file.oldPath && file.oldPath !== file.path ? `${file.oldPath} → ${file.path}` : file.path), changeCounts(file))
         })]
       }
@@ -1143,10 +1165,11 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
             entries.map(file => {
               const id = diffFileIdentity(file, mode)
               const title = file.oldPath ? `${file.oldPath} → ${file.path}` : file.path
+              const status = fileStatus(file)
               return h('button', { key: id, type: 'button', className: `gg-du-file${id === selectedId ? ' is-selected' : ''}`, title,
-                tabIndex: id === selectedId ? 0 : -1, 'aria-pressed': id === selectedId,
+                tabIndex: id === selectedId ? 0 : -1, 'aria-pressed': id === selectedId, 'data-status': status.code,
                 ref: node => { if (node) rows.current.set(id, node); else rows.current.delete(id) }, onClick: () => pick(file, false),
-              }, h('span', { className: 'gg-du-status', 'data-status': String(file.status || '?')[0].toUpperCase(), title: ({ M: 'Modified', A: 'Added', D: 'Deleted', R: 'Renamed', C: 'Copied', U: 'Unmerged', '?': 'Untracked' })[String(file.status || '?')[0].toUpperCase()] || file.status }, file.status || '?'), h('span', { className: 'gg-du-path' }, title))
+              }, h(FileIcon, { path: file.path }), h('span', { className: 'gg-sr-only' }, `${status.title}: `), h('span', { className: 'gg-du-path' }, title))
             }))
         })))
       const second = h(DiffPanel, { sessionId, signal, revision, params: selected ? { mode, base, head, path: selected.path, oldPath: selected.oldPath, group: selected.group, staged: selected.group === 'staged' } : {} })
@@ -1547,22 +1570,35 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
 /* Append to the existing plugin stylesheet. SplitPane owns responsive sizing. */
 .gg-du-workspace { display: flex; flex: 1 1 0; min-width: 0; min-height: 0; overflow: hidden; }
 .gg-du-workspace > * { flex: 1; min-width: 0; min-height: 0; }
-.gg-du-panel, .gg-du-filepane { display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; color: var(--dsw-alias-label-primary); font-size: 12px; }
+.gg-du-panel, .gg-du-filepane { display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; color: var(--dsw-alias-label-primary); font-family: inherit; font-size: var(--dsh-content-font-size, 14px); line-height: 1.45; }
 .gg-du-title { padding: 8px 10px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 12px/1.5 ui-monospace, monospace; border-bottom: 1px solid var(--dsw-alias-border-l1); }
-.gg-du-controls { display: flex; flex: none; align-items: center; flex-wrap: wrap; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--dsw-alias-border-l1); }
-.gg-du-button, .gg-du-context select { color: inherit; background: var(--dsw-alias-bg-base); border: 1px solid var(--dsw-alias-border-l1); border-radius: 4px; font: inherit; padding: 3px 6px; cursor: pointer; }
-.gg-du-button:hover:not(:disabled), .gg-du-button[aria-pressed="true"] { background: var(--dsw-alias-bg-layer-2); }
+.gg-du-controls { position: relative; z-index: 8; display: flex; flex: none; align-items: center; flex-wrap: wrap; gap: 3px; min-height: 32px; padding: 4px 6px; border-bottom: 1px solid var(--dsw-alias-border-l1); }
+.gg-du-button { box-sizing: border-box; height: 24px; color: var(--dsw-alias-label-secondary); background: transparent; border: 1px solid transparent; border-radius: 3px; font: 12px/22px inherit; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0 6px; }
+.gg-du-dropdown { position: relative; height: 24px; flex: none; font-size: 12px; }
+.gg-du-layout-select { width: 92px; }
+.gg-du-context-select { width: 100px; }
+.gg-du-dropdown-trigger { box-sizing: border-box; width: 100%; height: 24px; display: flex; align-items: center; gap: 5px; padding: 0 5px 0 7px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-2); border: 1px solid transparent; border-radius: 3px; font: inherit; text-align: left; cursor: pointer; }
+.gg-du-dropdown-trigger > span:first-child { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gg-du-dropdown-chevron { flex: none; color: var(--dsw-alias-label-tertiary); font-size: 13px; line-height: 1; transform: translateY(-1px); }
+.gg-du-dropdown.is-open .gg-du-dropdown-chevron { transform: rotate(180deg) translateY(1px); }
+.gg-du-dropdown-menu { position: absolute; top: calc(100% + 3px); left: 0; z-index: 30; min-width: 100%; width: max-content; max-width: 180px; padding: 3px; overflow: hidden; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-3, var(--dsw-alias-bg-base)); border: 1px solid var(--dsw-alias-border-l2); border-radius: 5px; box-shadow: 0 6px 18px rgba(0,0,0,.38); }
+.gg-du-dropdown-option { box-sizing: border-box; width: 100%; min-width: 116px; height: 25px; display: flex; align-items: center; gap: 5px; padding: 0 8px 0 4px; color: inherit; background: transparent; border: 0; border-radius: 3px; font: inherit; text-align: left; white-space: nowrap; cursor: pointer; }
+.gg-du-dropdown-option:hover, .gg-du-dropdown-option:focus-visible { background: var(--dsw-alias-interactive-bg-hover-solid, var(--dsw-alias-interactive-bg-hover)); outline: none; }
+.gg-du-dropdown-option.is-selected { color: var(--dsw-alias-label-primary); background: color-mix(in srgb, var(--dsw-alias-brand-primary) 16%, transparent); }
+.gg-du-dropdown-check { width: 13px; flex: none; color: var(--dsw-alias-brand-primary); text-align: center; }
+.gg-du-icon-button { width: 24px; padding: 0; }
+.gg-du-language { min-width: 30px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.gg-du-button:hover:not(:disabled), .gg-du-button[aria-pressed="true"], .gg-du-dropdown-trigger:hover { color: var(--dsw-alias-label-primary); background: var(--dsw-alias-interactive-bg-hover, var(--dsw-alias-bg-layer-2)); }
 .gg-du-button[aria-pressed="true"] { color: var(--dsw-alias-brand-primary); }
-.gg-du-button:disabled { opacity: .45; cursor: default; }
-.gg-du-button:focus-visible, .gg-du-file:focus-visible, .gg-du-filter input:focus-visible, .gg-du-context select:focus-visible, .gg-du-scroll:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: -2px; }
-.gg-du-context { display: inline-flex; align-items: center; gap: 3px; color: var(--dsw-alias-label-secondary); }
-.gg-du-counts { white-space: nowrap; margin-inline-end: auto; font-family: ui-monospace, monospace; }
+.gg-du-button:disabled { opacity: .4; cursor: default; }
+.gg-du-button:focus-visible, .gg-du-dropdown-trigger:focus-visible, .gg-du-file:focus-visible, .gg-du-filter input:focus-visible, .gg-du-scroll:focus-visible { outline: 1px solid var(--dsw-alias-brand-primary); outline-offset: -1px; }
+.gg-du-counts { white-space: nowrap; margin-inline-end: auto; padding: 0 4px; font: 12px/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .gg-du-added { color: var(--dsw-alias-state-success-primary, #22863a); }
 .gg-du-deleted { color: var(--dsw-alias-state-error-primary, #cb2431); }
 .gg-du-position, .gg-du-summary { color: var(--dsw-alias-label-secondary); font-size: 11px; }
 .gg-du-summary { flex: none; padding: 5px 10px; overflow-wrap: anywhere; border-bottom: 1px solid var(--dsw-alias-border-l1); }
 .gg-du-scroll { flex: 1 1 0; min-height: 0; min-width: 0; overflow: auto; overscroll-behavior: contain; position: relative; }
-.gg-du-patch { width: max-content; min-width: 100%; font: 12px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; tab-size: 4; }
+.gg-du-patch { width: max-content; min-width: 100%; font: var(--dsh-content-font-size, 14px)/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; tab-size: 4; }
 .gg-du-line { display: grid; grid-template-columns: 5ch 5ch minmax(0, 1fr); min-height: 1.6em; }
 .gg-du-split { min-width: 720px; }
 .gg-du-split-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); min-height: 1.6em; }
@@ -1584,47 +1620,70 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
 .gg-du-meta, .gg-du-note { color: var(--dsw-alias-label-secondary); }
 .gg-du-note { font-style: italic; }
 .gg-du-patch.is-wrapped { width: 100%; }
-.gg-du-patch.is-wrapped .gg-du-code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.gg-du-split.is-wrapped { min-width: 100%; }
+.gg-du-patch.is-wrapped .gg-du-code { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .gg-du-message { padding: 10px; color: var(--dsw-alias-label-secondary); border-bottom: 1px solid var(--dsw-alias-border-l1); line-height: 1.5; }
 .gg-du-filter { padding: 8px; flex: none; }
 .gg-du-filter input { box-sizing: border-box; width: 100%; min-width: 0; color: inherit; background: var(--dsw-alias-bg-base); border: 1px solid var(--dsw-alias-border-l1); border-radius: 5px; padding: 6px 8px; font: inherit; }
 .gg-du-filelist { overflow: auto; min-height: 0; flex: 1 1 0; overscroll-behavior: contain; }
 .gg-du-group-title { position: sticky; top: 0; z-index: 1; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-secondary); margin: 0; padding: 7px 10px; font-size: 11px; font-weight: 600; border-bottom: 1px solid var(--dsw-alias-border-l1); }
-.gg-du-file { display: flex; gap: 8px; align-items: flex-start; width: 100%; box-sizing: border-box; padding: 7px 10px; border: 0; border-bottom: 1px solid var(--dsw-alias-border-l1); background: transparent; text-align: left; color: inherit; font: inherit; cursor: pointer; }
+.gg-du-file { display: flex; gap: 8px; align-items: center; width: 100%; box-sizing: border-box; padding: 7px 10px; border: 0; border-bottom: 1px solid var(--dsw-alias-border-l1); background: transparent; text-align: left; color: inherit; font: inherit; cursor: pointer; }
 .gg-du-file:hover { background: var(--dsw-alias-bg-layer-2); }
-.gg-du-file.is-selected { background: rgba(76, 154, 255, .14); box-shadow: inset 3px 0 var(--dsw-alias-brand-primary); }
-.gg-du-status { flex: none; width: 2ch; font: 600 11px/1.5 ui-monospace, monospace; color: var(--dsw-alias-label-secondary); }
-.gg-du-path { min-width: 0; overflow-wrap: anywhere; line-height: 1.5; font-family: ui-monospace, monospace; }
+.gg-du-file.is-selected { background: rgba(76, 154, 255, .14); }
+.gg-du-path { min-width: 0; overflow-wrap: anywhere; line-height: 1.5; }
 
-/* Commit history table and row-local accordion. */
-.gg-column-heading { display: grid; grid-template-columns: 28px minmax(100px, 1fr) 126px 112px 72px; gap: 8px; align-items: center; }
-.gg-row { display: grid; grid-template-columns: 28px minmax(100px, 1fr) 126px 112px 72px; gap: 8px; align-items: center; box-sizing: border-box; padding-left: 8px !important; }
+/* Match the public VS Code Git Graph table: 24px rows, fixed graph gutter and 13px cells. */
+.gg-section-heading.gg-column-heading, .gg-row { display: grid; grid-template-columns: var(--gg-lane-width, 100px) minmax(220px, 1fr) 150px 72px 72px; column-gap: 0; align-items: center; }
+.gg-section-heading.gg-column-heading { min-height: 31px; padding: 0; background: transparent; border-block: 1px solid var(--dsw-alias-border-l1); font-size: inherit; font-weight: 600; line-height: 30px; }
+.gg-column-heading > span { height: 30px; padding: 0 12px; border-right: 1px solid var(--dsw-alias-border-l1); text-align: center; }
+.gg-column-heading > span:last-child { border-right: 0; }
+.gg-column-refresh { border: 0; padding: 0; color: inherit; background: transparent; font: inherit; font-weight: inherit; cursor: pointer; }
+.gg-column-refresh:hover { color: var(--dsw-alias-label-primary); }
+.gg-row { box-sizing: border-box; height: ${ROW_H}px; padding: 0 !important; border: 0; line-height: 26px; }
 .gg-row > .gg-row-body { display: contents; }
-.gg-row > .gg-row-body > .gg-description { grid-column: 2; }
+.gg-row > .gg-row-body > .gg-description { grid-column: 2; grid-row: 1; display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; padding: 0 4px; }
 .gg-row > .gg-row-body > .gg-row-meta { display: contents; }
-.gg-row > .gg-row-body > .gg-row-meta > .gg-date { grid-column: 3; }
-.gg-row > .gg-row-body > .gg-row-meta > .gg-author { grid-column: 4; }
-.gg-row > .gg-row-body > .gg-row-meta > .gg-hash { grid-column: 5; }
-.gg-hash { font-family: ui-monospace, monospace; color: var(--dsw-alias-label-secondary); }
-.gg-row-stack { position: relative; z-index: 1; }
-.gg-row-stack > .gg-accordion { position: relative; z-index: 3; }
-.gg-accordion { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); min-height: ${ACCORDION_H}px; max-height: ${ACCORDION_H}px; overflow: hidden; border-top: 1px solid var(--dsw-alias-border-l1); border-bottom: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-base); }
-.gg-accordion-meta, .gg-accordion-files { min-width: 0; min-height: 0; overflow: auto; padding: 8px 12px; }
-.gg-accordion-meta { border-right: 1px solid var(--dsw-alias-border-l1); }
-.gg-accordion-files { overscroll-behavior: contain; }
-.gg-accordion-subject { font-weight: 600; font-size: 13px; overflow-wrap: anywhere; margin-bottom: 6px; }
+.gg-row > .gg-row-body > .gg-row-meta > .gg-date { grid-column: 3; grid-row: 1; padding: 0 4px; }
+.gg-row > .gg-row-body > .gg-row-meta > .gg-author { grid-column: 4; grid-row: 1; padding: 0 4px; }
+.gg-row > .gg-row-body > .gg-row-meta > .gg-hash { grid-column: 5; grid-row: 1; padding: 0 4px; }
+.gg-hash { font-family: inherit; color: var(--dsw-alias-label-secondary); }
+.gg-row-stack { position: relative; z-index: 1; display: flex; flex-direction: column; min-height: ${ROW_H}px; }
+.gg-row-stack > .gg-row { flex: 0 0 ${ROW_H}px; }
+.gg-row-stack > .gg-accordion { position: relative; z-index: 3; flex: 0 0 var(--gg-accordion-height, ${ACCORDION_H}px); }
+.gg-accordion { display: grid; grid-template-columns: minmax(0, calc(var(--gg-accordion-split, 50%) - 3px)) 6px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 6px; height: var(--gg-accordion-height, ${ACCORDION_H}px); min-height: ${ACCORDION_MIN_H}px; max-height: ${ACCORDION_MAX_H}px; margin-left: var(--gg-lane-width, 100px); overflow: hidden; border-bottom: 1px solid var(--dsw-alias-border-l1); background: color-mix(in srgb, var(--dsw-alias-bg-layer-2) 52%, var(--dsw-alias-bg-base)); }
+.gg-accordion-meta, .gg-accordion-files { min-width: 0; min-height: 0; overflow: auto; padding: 10px; }
+.gg-accordion-meta { grid-column: 1; grid-row: 1; }
+.gg-accordion-files { grid-column: 3; grid-row: 1; }
+.gg-accordion-column-resizer { grid-column: 2; grid-row: 1; position: relative; cursor: col-resize; background: var(--dsw-alias-border-l1); touch-action: none; }
+.gg-accordion-column-resizer::after { content: ''; position: absolute; inset: 0 -3px; }
+.gg-accordion-height-resizer { grid-column: 1 / -1; grid-row: 2; position: relative; cursor: row-resize; background: var(--dsw-alias-border-l1); touch-action: none; }
+.gg-accordion-height-resizer::after { content: ''; position: absolute; inset: -3px 0; }
+.gg-accordion-column-resizer:hover, .gg-accordion-column-resizer:focus-visible, .gg-accordion-height-resizer:hover, .gg-accordion-height-resizer:focus-visible { background: var(--dsw-alias-brand-primary); outline: none; }
+.gg-accordion-state { grid-template-columns: 1fr; }
+.gg-accordion-state-content { grid-column: 1; grid-row: 1; display: flex; align-items: flex-start; justify-content: flex-start; gap: 7px; padding: 10px; color: var(--dsw-alias-label-secondary); }
+.gg-accordion-state-content > .gg-spinner { margin-top: 4px; }
+.gg-accordion-state.is-error .gg-accordion-state-content { flex-direction: column; color: var(--dsw-alias-state-error-primary); }
+.gg-accordion-state.is-error .gg-accordion-state-content span { max-width: min(560px, 80%); color: var(--dsw-alias-label-secondary); text-align: left; overflow-wrap: anywhere; }
+.gg-accordion-message { margin: 22px 0 0; padding: 0; white-space: pre-wrap; color: var(--dsw-alias-label-primary); }
+.gg-accordion .gg-meta { grid-template-columns: max-content minmax(0, 1fr); gap: 1px 4px; margin: 0; font-size: inherit; line-height: 1.4; }
+.gg-accordion .gg-meta dt { color: var(--dsw-alias-label-primary); }
+.gg-accordion-working { display: block; }
+.gg-working-title { margin: 0 0 3px; font-weight: 600; color: var(--dsw-alias-label-secondary); }
 .gg-tree { min-width: 0; }
-.gg-tree-folder-name { color: var(--dsw-alias-label-secondary); font-weight: 600; padding: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gg-tree-chevron { display: inline-block; width: 14px; color: var(--dsw-alias-label-secondary); }
-.gg-tree-children { padding-left: 14px; }
-.gg-tree-file { width: 100%; border: 0; background: transparent; text-align: left; color: inherit; }
+.gg-tree-folder-name { display: flex; align-items: center; gap: 5px; color: var(--dsw-alias-label-secondary); font-weight: 600; min-height: 22px; padding: 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gg-tree-chevron { display: inline-block; width: 12px; color: var(--dsw-alias-label-secondary); }
+.gg-tree-children { padding-left: 17px; }
+.gg-tree-file { width: 100%; min-height: 22px; padding: 0 3px; border: 0; border-radius: 0; background: transparent; text-align: left; color: inherit; }
+.gg-tree-file:hover { background: var(--dsw-alias-bg-layer-2); }
 .gg-tree-file .gg-path { flex: 1; }
-.gg-file-counts { flex: none; font-family: ui-monospace, monospace; font-size: 10px; color: var(--dsw-alias-label-secondary); white-space: nowrap; }
-.gg-working-group + .gg-working-group { border-top: 1px solid var(--dsw-alias-border-l1); margin-top: 8px; padding-top: 4px; }
-@media (max-width: 620px) { .gg-column-heading, .gg-row { grid-template-columns: 28px minmax(0, 1fr) 72px; gap: 5px; } .gg-column-heading span:nth-child(4), .gg-column-heading span:nth-child(5), .gg-row .gg-author, .gg-row .gg-hash { display: none; } .gg-column-heading span:nth-child(3), .gg-row .gg-date { grid-column: 3; } .gg-accordion { grid-template-columns: 1fr; overflow: auto; } .gg-accordion-meta { border-right: 0; border-bottom: 1px solid var(--dsw-alias-border-l1); max-height: 150px; } }
+.gg-file-counts { flex: none; display: inline-flex; gap: 4px; font-family: inherit; font-size: inherit; white-space: nowrap; }
+.gg-file-added { color: #3fb950; }
+.gg-file-removed { color: #f85149; }
+.gg-working-group + .gg-working-group { margin-top: 9px; padding-top: 7px; border-top: 1px solid var(--dsw-alias-border-l1); }
+@container (max-width: 760px) { .gg-section-heading.gg-column-heading, .gg-row { grid-template-columns: var(--gg-lane-width, 100px) minmax(0, 1fr) 112px; } .gg-column-heading span:nth-child(4), .gg-column-heading span:nth-child(5), .gg-row .gg-author, .gg-row .gg-hash { display: none; } .gg-column-heading span:nth-child(3), .gg-row .gg-date { grid-column: 3; } .gg-accordion { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) 6px; margin-left: var(--gg-lane-width, 100px); } .gg-accordion-meta { grid-column: 1; grid-row: 1; border-bottom: 1px solid var(--dsw-alias-border-l1); } .gg-accordion-files { grid-column: 1; grid-row: 2; } .gg-accordion-column-resizer { display: none; } .gg-accordion-height-resizer { grid-row: 3; } .gg-accordion-state { grid-template-rows: minmax(0, 1fr) 6px; } .gg-accordion-state .gg-accordion-height-resizer { grid-row: 2; } }
 
 .gg-host { display: flex; flex-direction: column; height: 100%; min-height: 0;
-  font-size: 12px; color: var(--dsw-alias-label-primary); }
+  font-family: inherit; font-size: var(--dsh-content-font-size, 14px); line-height: 1.45; color: var(--dsw-alias-label-primary); }
 .gg-root { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 
 /* The toolbar is one thin row: a name, a count, and icon buttons. */
@@ -1650,8 +1709,7 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
 .gg-graph-inner { position: relative; }
 .gg-canvas { position: absolute; left: 0; top: 0; pointer-events: none; }
 .gg-rows { position: relative; }
-.gg-row { display: flex; align-items: center; height: ${ROW_H}px; cursor: pointer;
-  padding-right: 8px; min-width: 0; }
+.gg-row { height: ${ROW_H}px; cursor: pointer; min-width: 0; }
 .gg-row:hover { background: var(--dsw-alias-bg-layer-2); }
 .gg-row.is-comparing { box-shadow: inset 2px 0 0 var(--dsw-alias-brand-primary); }
 .gg-row-body { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; }
@@ -1659,26 +1717,21 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
 .gg-subject { flex: 1 1 auto; min-width: 0; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
 .gg-row-meta { display: flex; gap: 8px; flex: 0 0 auto; max-width: 45%;
-  color: var(--dsw-alias-label-secondary); font-size: 10.5px; }
-.gg-author { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  max-width: 90px; }
+  color: var(--dsw-alias-label-secondary); font-size: inherit; }
+.gg-author { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gg-date { flex: none; font-variant-numeric: tabular-nums; }
-.gg-refs { display: inline-flex; gap: 3px; flex: 0 0 auto; max-width: 45%;
-  overflow: hidden; }
-.gg-ref { font-size: 9.5px; padding: 0 5px; border-radius: 999px; line-height: 14px;
-  border: 1px solid; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  max-width: 130px; }
-.gg-ref-branch { color: #34c759; border-color: rgba(52,199,89,.5); }
-.gg-ref-tag { color: #ffd60a; border-color: rgba(255,214,10,.5); }
-.gg-ref-detached { color: var(--dsw-alias-state-warn-primary);
-  border-color: var(--dsw-alias-state-warn-primary); }
-.gg-ref-head { color: var(--dsw-alias-brand-primary);
-  border-color: var(--dsw-alias-brand-primary); font-weight: 600; }
-.gg-more-btn { margin: 4px 8px 10px; font: inherit; font-size: 11px; padding: 4px 10px;
-  cursor: pointer; border-radius: 6px; border: 1px solid var(--dsw-alias-border-l1);
-  background: transparent; color: var(--dsw-alias-label-secondary); }
-.gg-more-btn:hover { background: var(--dsw-alias-bg-layer-2); }
-.gg-more-btn:disabled { opacity: .5; cursor: default; }
+.gg-refs { display: inline-flex; gap: 5px; flex: 0 1 auto; max-width: min(54%, 420px); overflow: hidden; }
+.gg-ref { display: inline-flex; flex: 0 1 auto; min-width: 0; height: 20px; border-radius: 4px; line-height: 18px; white-space: nowrap; overflow: hidden; max-width: 210px; background: rgba(128,128,128,.15); border: 1px solid rgba(128,128,128,.7); }
+.gg-ref-icon { display: inline-flex; align-items: center; justify-content: center; width: 19px; flex: none; margin: -1px 0 -1px -1px; color: var(--dsw-alias-bg-base); background: var(--gg-ref-color); }
+.gg-ref-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 0 5px; color: var(--dsw-alias-label-primary); font-size: var(--dsh-content-font-size-secondary, 13px); }
+.gg-ref-head { border-color: var(--gg-ref-color); font-weight: 600; }
+.gg-ref-head .gg-ref-icon { color: white; }
+.gg-history-status { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 30px; padding: 2px 10px 8px; color: var(--dsw-alias-label-secondary); font-size: var(--dsh-content-font-size-secondary, 13px); }
+.gg-spinner { box-sizing: border-box; width: 12px; height: 12px; flex: none; border: 1.5px solid color-mix(in srgb, currentColor 30%, transparent); border-top-color: currentColor; border-radius: 50%; animation: gg-spin .75s linear infinite; }
+@keyframes gg-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .gg-spinner { animation-duration: 1.8s; } }
+.gg-more-btn { display: block; margin: 5px auto 10px; font: inherit; font-size: var(--dsh-content-font-size-secondary, 13px); padding: 3px 9px; cursor: pointer; border-radius: 3px; border: 1px solid transparent; background: transparent; color: var(--dsw-alias-label-secondary); }
+.gg-more-btn:hover { color: var(--dsw-alias-label-primary); background: var(--dsw-alias-interactive-bg-hover, var(--dsw-alias-bg-layer-2)); }
 
 .gg-scroll { overflow: auto; flex: 1; min-height: 0; }
 .gg-detail-wrap { padding: 10px; }
@@ -1699,18 +1752,25 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
   border-bottom: 1px solid var(--dsw-alias-border-l1); }
 
 .gg-files { display: flex; flex-direction: column; }
-.gg-file { display: flex; align-items: center; gap: 8px; padding: 3px 4px;
-  border-radius: 6px; cursor: pointer; min-width: 0; }
+.gg-file { display: flex; align-items: center; gap: 8px; padding: 3px 4px; border-radius: 4px; cursor: pointer; min-width: 0; }
 .gg-file:hover { background: var(--dsw-alias-bg-layer-2); }
-.gg-status { flex: none; width: 14px; text-align: center;
-  font-family: ui-monospace, monospace; font-weight: 700; font-size: 11px; }
-.gg-status-A { color: #34c759; }
-.gg-status-M { color: #ff9f0a; }
-.gg-status-D { color: #ff453a; }
-.gg-status-R, .gg-status-C { color: #4c9aff; }
-.gg-status-\\? { color: var(--dsw-alias-label-secondary); }
-.gg-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  min-width: 0; font-family: ui-monospace, monospace; font-size: 11px; }
+.gg-file-icon { flex: none; width: 16px; height: 16px; fill: color-mix(in srgb, var(--dsw-alias-label-secondary) 22%, transparent); stroke: var(--dsw-alias-label-secondary); stroke-width: 1.2; stroke-linejoin: round; }
+.gg-file-icon-folder { fill: light-dark(#d9a441, #dcb659); stroke: light-dark(#8d681e, #e6c46d); }
+.gg-file-icon-js, .gg-file-icon-jsx { fill: #d7ba7d33; stroke: #d7ba7d; }
+.gg-file-icon-ts, .gg-file-icon-tsx { fill: #519aba33; stroke: #519aba; }
+.gg-file-icon-json { fill: #cbcb4133; stroke: #cbcb41; }
+.gg-file-icon-md, .gg-file-icon-markdown { fill: #519aba33; stroke: #519aba; }
+.gg-file-icon-css, .gg-file-icon-scss { fill: #42a5f533; stroke: #42a5f5; }
+.gg-file-icon-html { fill: #e3793333; stroke: #e37933; }
+.gg-file-icon-py { fill: #ffd43b33; stroke: #4b8bbe; }
+.gg-file-icon-fold { fill: none; }
+.gg-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; font: inherit; }
+.gg-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+.gg-file[data-status='M'], .gg-du-file[data-status='M'] { --gg-status-accent: #e2a93b; }
+.gg-file[data-status='A'], .gg-file[data-status='?'], .gg-du-file[data-status='A'], .gg-du-file[data-status='?'] { --gg-status-accent: #3fb950; }
+.gg-file[data-status='D'], .gg-file[data-status='U'], .gg-du-file[data-status='D'], .gg-du-file[data-status='U'] { --gg-status-accent: #f85149; }
+.gg-file[data-status='R'], .gg-file[data-status='C'], .gg-du-file[data-status='R'], .gg-du-file[data-status='C'] { --gg-status-accent: #58a6ff; }
+.gg-file[data-status] .gg-path, .gg-du-file[data-status] .gg-du-path { color: var(--gg-status-accent); }
 .gg-group { padding: 0 10px 10px; }
 
 /* The patch: one scroll container, one monospace column, no inner scrolling. */
@@ -1760,12 +1820,9 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
 .gg-split-vertical > .gg-divider { cursor: row-resize; }
 .gg-split-vertical > .gg-divider::after { height: 3px; width: 30px; left: calc(50% - 15px); top: 2px; }
 .gg-divider:hover::after, .gg-divider:focus-visible::after { background: var(--dsw-alias-brand-primary); }
-.gg-section-heading { display: flex; justify-content: space-between; padding: 6px 10px; font-size: 10px; letter-spacing: .06em; color: var(--dsw-alias-label-secondary); border-bottom: 1px solid var(--dsw-alias-border-l1); }
-.gg-modes { display: flex; gap: 2px; padding: 2px; border-radius: 7px; background: var(--dsw-alias-bg-layer-2); margin-right: 6px; }
-.gg-mode { border: 0; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 11px; padding: 4px 9px; border-radius: 5px; cursor: pointer; }
-.gg-mode.is-active { background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); box-shadow: 0 1px 3px #0002; font-weight: 600; }
-.gg-readonly { font-size: 9px; color: var(--dsw-alias-label-secondary); white-space: nowrap; border: 1px solid var(--dsw-alias-border-l1); border-radius: 4px; padding: 2px 4px; }
-.gg-row.is-selected, .gg-file.is-selected { background: color-mix(in srgb, var(--dsw-alias-brand-primary) 16%, transparent); box-shadow: inset 2px 0 var(--dsw-alias-brand-primary); }
+.gg-section-heading { display: flex; justify-content: space-between; padding: 6px 10px; font-size: 12px; letter-spacing: 0; color: var(--dsw-alias-label-secondary); border-bottom: 1px solid var(--dsw-alias-border-l1); }
+.gg-readonly { font-size: 11px; color: var(--dsw-alias-label-secondary); white-space: nowrap; border: 1px solid var(--dsw-alias-border-l1); border-radius: 4px; padding: 2px 5px; }
+.gg-row.is-selected, .gg-file.is-selected { background: rgba(128,128,128,.28); }
 .gg-row[aria-pressed=true] .gg-subject { font-weight: 600; }
 .gg-row:focus-visible, .gg-file:focus-visible, .gg-host button:focus-visible, .gg-host summary:focus-visible, .gg-host input:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: -2px; }
 .gg-host button:disabled { opacity: .4; cursor: default; }
@@ -1777,7 +1834,7 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
 .gg-commit-caption { display: block; font-size: 10px; color: var(--dsw-alias-label-secondary); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gg-commit-extra { padding: 0 10px 10px; font-size: 11px; overflow-wrap: anywhere; }
 .gg-commit-extra .gg-link { margin: 4px 6px 0 0; }
-@container (max-width: 350px) { .gg-readonly { display: none; } .gg-mode { padding-inline: 6px; } }
+@container (max-width: 350px) { .gg-readonly { display: none; } }
 
 `
 

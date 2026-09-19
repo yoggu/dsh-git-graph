@@ -6,14 +6,24 @@ import { createRoot } from 'react-dom/client'
 const h = React.createElement
 const seats = new Map()
 const disposers = []
-window.testState = { openTabs: 0, registrations: [], ready: false }
+window.testState = { openTabs: 0, opened: [], registrations: [], ready: false }
 const lifetime = new AbortController()
-const tabInfo = { tab: { signal: lifetime.signal, navigation: { params: {} }, actions: { openTab() { window.testState.openTabs++ } } } }
-let renderRoot, fixtureSession = 'fixture', view = 'git-graph'
-const props = () => ({ sessionId: fixtureSession, useTabInfo: () => tabInfo,
+let renderRoot, fixtureSession = 'fixture', view = 'git-graph', navigationParams = {}
+const openTab = (kind, options = {}) => {
+  window.testState.openTabs++
+  window.testState.opened.push({ kind, params: options.params ?? {} })
+  view = kind
+  navigationParams = options.params ?? {}
+  mount()
+}
+const tabInfo = () => ({ tab: { signal: lifetime.signal, navigation: { params: navigationParams }, actions: { openTab } } })
+const props = () => ({ sessionId: fixtureSession, useTabInfo: tabInfo,
   useSessions: selector => selector({ byId: { [fixtureSession]: { cwd: '/test-repository' } } }) })
 function mount() {
-  const id = view === 'git-graph' ? 'dsh-git-graph' : 'dsh-git-graph/changes'
+  const id = view === 'git-graph' ? 'dsh-git-graph'
+    : view === 'git-changes' ? 'dsh-git-graph/changes'
+      : view === 'git-diff' ? 'dsh-git-graph/diff'
+        : 'dsh-git-graph/commit'
   const Body = seats.get(`sidebar.right.pane.tab:${id}`)
   const Title = seats.get(`sidebar.right.pane.tab.title:${id}`)
   renderRoot ||= createRoot(document.getElementById('root'))
@@ -23,7 +33,7 @@ function mount() {
   window.testState.ready = true
 }
 window.testHarness = {
-  setSession(sessionId, kind = 'git-graph') { fixtureSession = sessionId; view = kind; mount() },
+  setSession(sessionId, kind = 'git-graph', params = {}) { fixtureSession = sessionId; view = kind; navigationParams = params; mount() },
   theme(theme) { document.documentElement.dataset.theme = theme },
   dispose() { renderRoot?.unmount(); lifetime.abort(); disposers.reverse().forEach(dispose => dispose?.()) },
 }
@@ -33,7 +43,7 @@ window.__ModuleLoader__ = {
     const plugin = registration.factory(name => { if (name === 'react') return React; throw new Error(`Unexpected module ${name}`) })
     const ctx = {
       effect(fn) { const dispose = fn(); if (typeof dispose === 'function') disposers.push(dispose) },
-      get(name) { return name === 'sidebarRight' ? { openTab() { window.testState.openTabs++ } } : undefined },
+      get(name) { return name === 'sidebarRight' ? { openTab } : undefined },
       sidebarRightTabs: { register(def) { window.testState.registrations.push(def.kind); return () => {} } },
       slots: {
         inject(name, register) { return register() },
