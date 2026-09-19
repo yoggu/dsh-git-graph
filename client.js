@@ -207,14 +207,14 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
      * leave at the merge child, while branch-source joins land at the ancestor
      * itself. Both bends fit inside the endpoint row, never half a history away.
      */
-    function graphEdgePath(edge, rowCount) {
+    function graphEdgePath(edge, rowCount, offsets = [], extraHeight = 0) {
       const x = column => LANE_X0 + column * LANE_W
-      const y = row => row * ROW_H + ROW_H / 2
+      const y = row => row * ROW_H + ROW_H / 2 + (offsets[row] || 0)
       const x1 = x(edge.from.column)
       const y1 = y(edge.from.row)
       const trackX = x(edge.column)
       const x2 = edge.to === null ? trackX : x(edge.to.column)
-      const y2 = edge.to === null ? rowCount * ROW_H : y(edge.to.row)
+      const y2 = edge.to === null ? rowCount * ROW_H + extraHeight : y(edge.to.row)
       const bend = Math.min(10, ROW_H * 0.4, Math.max(0, (y2 - y1) / 2))
       let path = `M ${x1} ${y1}`
       if (x1 !== trackX) {
@@ -376,29 +376,36 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
     }
 
     // BEGIN GRAPH CANVAS
-    function GraphCanvas({ rows, edges, columnCount, height }) {
+    function GraphCanvas({ rows, edges, columnCount, height, expandedRow = -1, expandedHeight = 0 }) {
       const width = LANE_X0 * 2 + columnCount * LANE_W
-      const paths = edges.map((edge, i) => h('path', {
+      // The accordion occupies real row space. Keep the lane algorithm pure,
+      // but shift endpoints below the open row so rails still meet their dots.
+      const offsets = rows.map((_, row) => row > expandedRow ? expandedHeight : 0)
+      const syntheticPath = rows[0]?.commit?.synthetic && rows.length > 1 ? h('path', {
+        key: 'working-link', d: `M ${LANE_X0 + rows[0].column * LANE_W} ${ROW_H / 2} L ${LANE_X0 + rows[1].column * LANE_W} ${ROW_H + ROW_H / 2 + (offsets[1] || 0)}`,
+        stroke: '#8b949e', strokeWidth: 1.8, fill: 'none', strokeLinecap: 'round', opacity: 0.85,
+      }) : null
+      const paths = [...(syntheticPath ? [syntheticPath] : []), ...edges.map((edge, i) => h('path', {
         key: `e${i}`,
-        d: graphEdgePath(edge, rows.length),
-        stroke: laneColor(edge.slot),
+        d: graphEdgePath(edge, rows.length, offsets, expandedRow >= 0 ? expandedHeight : 0),
+        stroke: edge.from?.commit?.synthetic || rows[edge.from.row]?.commit?.synthetic
+          ? '#8b949e' : laneColor(edge.slot),
         strokeWidth: edge.main ? 1.8 : 1.5,
         fill: 'none',
         strokeLinecap: 'round',
         strokeLinejoin: 'round',
-        // Continuations reach the viewport boundary in their own live track;
-        // no tiny dashed stubs that misleadingly resemble branch roots.
         opacity: edge.to === null ? 0.7 : 1,
-      }))
+      }))]
       const dots = rows.map((row, i) => {
         const merge = row.commit.parents.length > 1
+        const color = row.commit.synthetic ? '#8b949e' : laneColor(row.slot)
         return h('circle', {
           key: `d${i}`,
           cx: LANE_X0 + row.column * LANE_W,
-          cy: i * ROW_H + ROW_H / 2,
+          cy: i * ROW_H + ROW_H / 2 + offsets[i],
           r: merge ? DOT_R : DOT_R - 0.5,
-          fill: merge ? 'var(--dsw-alias-bg-base)' : laneColor(row.slot),
-          stroke: laneColor(row.slot),
+          fill: merge ? 'var(--dsw-alias-bg-base)' : color,
+          stroke: color,
           strokeWidth: merge ? 1.8 : 0,
         })
       })
@@ -443,9 +450,11 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
         className: `gg-row${selected ? ' is-selected' : ''}${comparing ? ' is-comparing' : ''}`,
         role: 'button',
         'aria-pressed': selected,
+        'aria-expanded': selected,
+        'aria-controls': selected ? `gg-accordion-${commit.hash}` : undefined,
         tabIndex: selected ? 0 : -1,
         title: `${commit.hash}\n${commit.subject}\n${commit.authorName} — ${stamp}`,
-        style: { paddingLeft: `${indent}px` },
+        style: { '--gg-lane-width': `${indent}px` },
         onClick: (event) => {
           if (event.metaKey || event.ctrlKey) { onCompare(commit); return }
           onSelect(commit)
@@ -462,13 +471,12 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
         },
       },
       h('span', { className: 'gg-row-body' },
-        h('span', { className: 'gg-subject' }, commit.subject),
+        h('span', { className: 'gg-subject gg-description', title: commit.subject }, commit.subject),
         grouped.length > 0 ? h(RefBadges, { refs: grouped }) : null,
-        dense
-          ? null
-          : h('span', { className: 'gg-row-meta' },
-            h('span', { className: 'gg-author' }, commit.authorName),
-            h('span', { className: 'gg-date' }, stamp))))
+        h('span', { className: 'gg-row-meta' },
+          h('span', { className: 'gg-author' }, commit.synthetic ? `${commit.count ?? 0} files` : commit.authorName),
+          h('span', { className: 'gg-date' }, commit.synthetic ? '' : stamp),
+          h('span', { className: 'gg-hash' }, commit.synthetic ? '' : commit.hash.slice(0, 8)))))
     }
 
     /** Resizable, keyboard-accessible panes; orientation follows available width. */
@@ -535,7 +543,7 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
     }
 
     /** One stable history browser. Selection updates the inspector, never a tab. */
-    function GraphView({ tabInfo, sessionId }) {
+    function LegacyGraphView({ tabInfo, sessionId }) {
       const signal = tabInfo.tab.signal
       const [state, setState] = React.useState({ commits: [], refs: null, exhausted: false, nextSkip: 0 })
       const [selected, setSelected] = React.useState(null)
@@ -563,7 +571,7 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
           }
           if (request.current !== id || signal.aborted) return
           setState(current => ({ ...result, refs: result.refs ?? current.refs, commits: append ? [...current.commits, ...result.commits] : result.commits }))
-          setSelected(current => current ?? result.commits[0]?.hash ?? null)
+          /* selection stays closed until the reader clicks a row */
         } catch (err) { if (request.current === id && err.name !== 'AbortError') setError(String(err.message ?? err)) }
         finally { if (request.current === id) setBusy(false) }
       }, [sessionId, signal, state.nextSkip, state.commits.length])
@@ -613,7 +621,122 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
         menu ? h(ContextMenu, { menu, markers: [], onClose: () => setMenu(null), onOpenCommit: openCommit, onFlash: flash }) : null)
     }
 
-    function CommitInspector({ hash, sessionId, signal, revision = 0, onSelect }) {
+    const ACCORDION_H = 300
+
+    function CommitAccordion({ hash, sessionId, signal, revision = 0, onSelect, tabInfo }) {
+      const [state, setState] = React.useState({ detail: null, error: null })
+      React.useEffect(() => {
+        let active = true
+        setState(current => ({ detail: current.detail?.hash === hash ? current.detail : null, error: null }))
+        call({ op: 'commit', sessionId, hash }, signal).then(result => { if (active) setState({ detail: result.detail, error: null }) })
+          .catch(error => { if (active && error.name !== 'AbortError') setState({ detail: null, error: String(error.message ?? error) }) })
+        return () => { active = false }
+      }, [hash, sessionId, signal, revision])
+      const detail = state.detail?.hash === hash ? state.detail : null
+      if (state.error) return h('div', { className: 'gg-error', role: 'alert' }, state.error)
+      if (!detail) return h('div', { className: 'gg-empty', role: 'status' }, 'Loading commit…')
+      const openFile = file => openDiffTab(tabInfo, { mode: 'commits', base: detail.parents[0] ?? EMPTY_TREE, head: detail.hash, path: file.path, oldPath: file.oldPath })
+      return h('div', { id: `gg-accordion-${hash}`, className: 'gg-accordion', 'aria-label': 'Commit details' },
+        h('section', { className: 'gg-accordion-meta' },
+          h('div', { className: 'gg-detail-label' }, 'Commit'),
+          h('div', { className: 'gg-accordion-subject' }, detail.message.split('\n')[0]),
+          h('p', { className: 'gg-msg' }, detail.message),
+          h('dl', { className: 'gg-meta' },
+            h('dt', null, 'Hash'), h('dd', { className: 'gg-mono' }, detail.hash),
+            h('dt', null, 'Author'), h('dd', null, `${detail.authorName} <${detail.authorEmail}>`),
+            h('dt', null, 'Date'), h('dd', null, formatDate(detail.authorDate)),
+            h('dt', null, 'Committer'), h('dd', null, `${detail.committerName} <${detail.committerEmail}>`),
+            h('dt', null, 'Committed'), h('dd', null, formatDate(detail.committerDate)),
+            h('dt', null, 'Parents'), h('dd', null, detail.parents.length ? detail.parents.map(parent => h('button', { key: parent, className: 'gg-link', onClick: () => onSelect?.(parent) }, parent.slice(0, 10))).reduce((all, item, i) => i ? [...all, ' ', item] : [item], []) : 'None')),
+          h('button', { className: 'gg-link', onClick: () => copyText(detail.hash) }, 'Copy hash')),
+        h('section', { className: 'gg-accordion-files' },
+          h('div', { className: 'gg-detail-label' }, `Changed files · ${detail.files.length}`),
+          h(ChangedTree, { files: detail.files, onOpen: openFile })))
+    }
+
+    function WorkingAccordion({ files = [], tabInfo }) {
+      const openFile = file => openDiffTab(tabInfo, { mode: 'working', base: 'HEAD', head: '', path: file.path, oldPath: file.oldPath, group: file.group, staged: file.group === 'staged' })
+      const groups = ['staged', 'unstaged', 'untracked']
+      return h('div', { id: 'gg-accordion-WORKTREE', className: 'gg-accordion', 'aria-label': 'Uncommitted changes' },
+        h('section', { className: 'gg-accordion-meta' }, h('div', { className: 'gg-detail-label' }, 'Working tree'),
+          h('div', { className: 'gg-accordion-subject' }, 'Uncommitted changes'),
+          h('p', { className: 'gg-msg' }, 'Read-only snapshot of staged, unstaged and untracked files.')),
+        h('section', { className: 'gg-accordion-files' }, groups.map(group => {
+          const entries = files.filter(file => file.group === group)
+          if (!entries.length) return null
+          return h('div', { key: group, className: 'gg-working-group' }, h('div', { className: 'gg-detail-label' }, `${group[0].toUpperCase()}${group.slice(1)} · ${entries.length}`), h(ChangedTree, { files: entries, onOpen: openFile }))
+        })))
+    }
+
+    /** Accordion history: full-width graph rows, with one row-local expansion. */
+    function GraphView({ tabInfo, sessionId }) {
+      const signal = tabInfo.tab.signal
+      const [state, setState] = React.useState({ commits: [], refs: null, exhausted: false, nextSkip: 0 })
+      const [working, setWorking] = React.useState({ files: [], error: null })
+      const [selected, setSelected] = React.useState(null)
+      const [mode, setMode] = React.useState('history')
+      const [error, setError] = React.useState(null)
+      const [busy, setBusy] = React.useState(false)
+      const [revision, setRevision] = React.useState(0)
+      const [menu, setMenu] = React.useState(null)
+      const [notice, setNotice] = React.useState(null)
+      const request = React.useRef(0)
+      const noticeTimer = React.useRef(null)
+      const graphRef = React.useRef(null)
+      const loadWorking = React.useCallback(() => call({ op: 'working', sessionId }, signal).then(result => {
+        const files = ['staged', 'unstaged', 'untracked'].flatMap(group => (result[group] ?? []).map(entry => ({ ...entry, group, staged: group === 'staged' })))
+        setWorking({ files, error: null }); return files
+      }).catch(err => { if (err.name !== 'AbortError') setWorking(current => ({ ...current, error: String(err.message ?? err) })); return [] }), [sessionId, signal])
+      const load = React.useCallback(async (append = false) => {
+        const id = ++request.current
+        setBusy(true); setError(null)
+        try {
+          const result = await call({ op: 'commits', sessionId, skip: append ? state.nextSkip : 0, limit: append ? 120 : Math.max(120, Math.min(600, state.commits.length)) }, signal)
+          while (!append && !result.exhausted && result.commits.length < state.commits.length) {
+            if (request.current !== id || signal.aborted) return
+            const page = await call({ op: 'commits', sessionId, skip: result.nextSkip, limit: Math.min(600, state.commits.length - result.commits.length) }, signal)
+            result.commits.push(...page.commits); result.nextSkip = page.nextSkip; result.exhausted = page.exhausted || page.commits.length === 0
+          }
+          if (request.current !== id || signal.aborted) return
+          setState(current => ({ ...result, refs: result.refs ?? current.refs, commits: append ? [...current.commits, ...result.commits] : result.commits }))
+          /* selection stays closed until the reader clicks a row */
+        } catch (err) { if (request.current === id && err.name !== 'AbortError') setError(String(err.message ?? err)) }
+        finally { if (request.current === id) setBusy(false) }
+      }, [sessionId, signal, state.nextSkip, state.commits.length])
+      React.useEffect(() => { load(); loadWorking(); return () => { request.current += 1; clearTimeout(noticeTimer.current) } }, [sessionId, signal])
+      const workingCount = React.useMemo(() => new Set(working.files.map(file => file.path)).size, [working.files])
+      const synthetic = React.useMemo(() => ({ hash: 'WORKTREE', parents: [], authorName: '', authorDate: '', refs: [], subject: `Uncommitted changes (${workingCount})`, synthetic: true, count: workingCount }), [workingCount])
+      const commits = React.useMemo(() => workingCount > 0 ? [synthetic, ...state.commits] : state.commits, [workingCount, synthetic, state.commits])
+      const graph = React.useMemo(() => layout(commits, !state.exhausted), [commits, state.exhausted])
+      const selectedIndex = commits.findIndex(commit => commit.hash === selected)
+      const expanded = selectedIndex >= 0
+      const flash = text => { setNotice(text); clearTimeout(noticeTimer.current); noticeTimer.current = setTimeout(() => setNotice(null), 1800) }
+      const toggle = commit => setSelected(current => current === commit.hash ? null : commit.hash)
+      const rows = graph.rows.map((row, index) => h('div', { key: row.commit.hash, className: 'gg-row-stack' },
+        h(CommitRow, { row, indent: LANE_X0 * 2 + graph.columnCount * LANE_W, dense: false, remotes: state.refs?.remotes ?? [], selected: selected === row.commit.hash,
+          onSelect: toggle, onCompare: toggle, onContextMenu: (event, commit) => setMenu({ x: event.clientX, y: event.clientY, commit }) }),
+        selected === row.commit.hash ? (row.commit.synthetic ? h(WorkingAccordion, { files: working.files, tabInfo }) : h(CommitAccordion, { hash: row.commit.hash, sessionId, signal, revision, tabInfo, onSelect: hash => setSelected(hash) })) : null))
+      const totalHeight = graph.rows.length * ROW_H + (expanded ? ACCORDION_H : 0)
+      return h('div', { className: 'gg-root gg-workbench' },
+        h('div', { className: 'gg-toolbar' }, h('div', { className: 'gg-modes', role: 'group', 'aria-label': 'Git view' }, ['history', 'changes'].map(value => h('button', { key: value, className: `gg-mode${mode === value ? ' is-active' : ''}`, 'aria-pressed': mode === value, onClick: () => setMode(value) }, value === 'history' ? 'History' : 'Changes'))),
+          h('span', { className: 'gg-repo', title: state.refs?.head ?? '' }, state.refs?.head ?? 'Git'), h('span', { className: 'gg-readonly' }, 'Read-only'),
+          h('button', { className: 'gg-icon-btn', 'aria-label': 'Refresh Git', title: 'Refresh history and working changes', disabled: busy, onClick: () => { load(); loadWorking(); setRevision(value => value + 1) } }, h(GitIcon, { name: 'refresh' }))),
+        notice ? h('div', { className: 'gg-notice', role: 'status' }, notice) : null,
+        h('div', { className: 'gg-mode-content', hidden: mode !== 'history' },
+          h('section', { className: 'gg-root gg-history', 'aria-label': 'Commit history' },
+            h('div', { className: 'gg-section-heading gg-column-heading' }, h('span', null, 'Graph'), h('span', null, 'Description'), h('span', null, 'Date'), h('span', null, 'Author'), h('span', null, 'Commit')),
+            error ? h('div', { className: 'gg-error', role: 'alert' }, error) : null,
+            h('div', { ref: graphRef, className: 'gg-graph', 'aria-busy': busy, onKeyDown: event => {
+              if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+              event.preventDefault(); const index = selectedIndex < 0 ? 0 : selectedIndex; const next = event.key === 'Home' ? 0 : event.key === 'End' ? commits.length - 1 : Math.max(0, Math.min(commits.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1))); const commit = commits[next]
+              if (commit) { toggle(commit); graphRef.current.querySelectorAll('.gg-row')[next]?.focus({ preventScroll: true }); graphRef.current.querySelectorAll('.gg-row')[next]?.scrollIntoView({ block: 'nearest' }) }
+            } }, h('div', { className: 'gg-graph-inner', style: { height: totalHeight } }, h(GraphCanvas, { ...graph, height: totalHeight, expandedRow: expanded ? selectedIndex : -1, expandedHeight: expanded ? ACCORDION_H : 0 }), h('div', { className: 'gg-rows' }, rows)),
+            busy && !state.commits.length ? h('div', { className: 'gg-empty', role: 'status' }, 'Reading the repository…') : null, !busy && !error && !state.commits.length ? h('div', { className: 'gg-empty' }, 'No commits yet. Review uncommitted files above.') : null, state.commits.length ? h('button', { className: 'gg-more-btn', disabled: busy || state.exhausted, onClick: () => load(true) }, busy ? 'Loading…' : state.exhausted ? 'All commits loaded' : 'Load older commits') : null)),
+        h('div', { className: 'gg-mode-content', hidden: mode !== 'changes' }, h(ChangesView, { tabInfo, sessionId, revision })),
+        menu ? h(ContextMenu, { menu, markers: [], onClose: () => setMenu(null), onOpenCommit: toggle, onFlash: flash }) : null))
+    }
+
+    function CommitInspector({ hash, sessionId, signal, revision = 0, onSelect, tabInfo }) {
       const [state, setState] = React.useState({ detail: null, error: null })
       React.useEffect(() => {
         let active = true
@@ -634,7 +757,7 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
             h('button', { className: 'gg-link', onClick: () => copyText(hash) }, 'Copy commit hash'),
             detail.parents.length > 0 ? h('div', null, 'Parents: ', detail.parents.map(parent => h('button', { key: parent, className: 'gg-link', onClick: () => onSelect?.(parent) }, `${parent.slice(0, 8)} `))) : null)),
         h('div', { className: 'gg-diff-summary' }, `${detail.files.length} changed files · ${detail.parents.length > 1 ? 'Merge · compared with first parent' : detail.parents.length ? 'Compared with parent' : 'Root commit · all added files'}`),
-        h(FileWorkspace, { files: detail.files, sessionId, signal, base: detail.parents[0] ?? EMPTY_TREE, head: detail.hash, revision }))
+        h(FileWorkspace, { files: detail.files, sessionId, signal, base: detail.parents[0] ?? EMPTY_TREE, head: detail.hash, revision, tabInfo }))
     }
 
     /** Legacy commit links use the same persistent file/diff browser. */
@@ -642,7 +765,7 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
       const initial = tabInfo.tab.navigation?.params?.hash
       const [hash, setHash] = React.useState(initial)
       React.useEffect(() => setHash(initial), [initial])
-      return hash ? h(CommitInspector, { hash, sessionId, signal: tabInfo.tab.signal, onSelect: setHash }) : h('div', { className: 'gg-empty' }, 'No commit selected.')
+      return hash ? h(CommitInspector, { hash, sessionId, signal: tabInfo.tab.signal, onSelect: setHash, tabInfo }) : h('div', { className: 'gg-empty' }, 'No commit selected.')
     }
 
     function DiffView({ tabInfo, sessionId }) {
@@ -671,7 +794,7 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
         h('div', { className: 'gg-diff-summary', role: 'status' }, state.busy ? 'Reading working tree…' : readAt === null ? 'Snapshot unavailable' : `Snapshot ${readAt} · refresh to see the agent’s latest edits`),
         state.error ? h('div', { className: 'gg-error', role: 'alert' }, state.error) : null,
         !state.busy && !state.error && state.files.length === 0 ? h('div', { className: 'gg-empty' }, 'Working tree clean. No uncommitted changes.') : null,
-        h(FileWorkspace, { files: state.files, mode: 'working', sessionId, signal, revision: revision + refresh }))
+        h(FileWorkspace, { files: state.files, mode: 'working', sessionId, signal, tabInfo, revision: revision + refresh }))
     }
 
     // Insert inside the existing factory; requires React, h, call, GitIcon and SplitPane.
@@ -886,7 +1009,7 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
         h('div', { className: 'gg-du-title', title }, title || 'Diff preview'),
         h('div', { className: 'gg-du-controls' },
           h('button', { type: 'button', className: 'gg-du-button', 'aria-pressed': wrap, onClick: () => setWrap(value => !value) }, 'Wrap'),
-          h('label', { className: 'gg-du-context' }, 'Layout ', h('select', { value: layoutMode, onChange: event => setLayoutMode(event.target.value), 'aria-label': 'Diff layout' }, [['auto', 'Auto'], ['split', 'Split'], ['unified', 'Unified']].map(([value, label]) => h('option', { key: value, value }, label)))),
+          h('label', { className: 'gg-du-context' }, 'Layout ', h('select', { value: layoutMode, onChange: event => setLayoutMode(event.target.value), 'aria-label': 'Diff layout' }, [['auto', 'Auto'], ['split', 'Split'], ['unified', 'Combined']].map(([value, label]) => h('option', { key: value, value }, label)))),
           h('button', { type: 'button', className: 'gg-du-button', disabled: !language, 'aria-label': 'Syntax highlighting', 'aria-pressed': syntax && !!highlights,
             title: !language ? 'Plain text: unsupported file type' : highlights ? `${language} highlighting — shown diff context only` : 'Highlighting off or diff exceeds the 200 KB / 5,000 line limit', onClick: () => setSyntax(value => !value) }, language || 'Plain text'),
           h('label', { className: 'gg-du-context' }, 'Context ', h('select', { value: context, onChange: event => setContext(Number(event.target.value)), 'aria-label': 'Context lines' }, [0, 3, 10, 25, 50, 100].map(value => h('option', { key: value, value }, value)))),
@@ -901,8 +1024,80 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
         h('div', { ref: scroll, className: 'gg-du-scroll', tabIndex: 0, 'aria-label': 'Scrollable diff', 'aria-busy': !untracked && !!path && current.status === 'loading' }, body))
     }
 
-    /** Files are flat entries {path, oldPath?, status, group?, staged?}; no tab opening. */
-    function FileWorkspace({ files = [], sessionId, signal, base, head, mode = 'commits', revision = 0 }) {
+    /** Open every changed file in a fresh right-sidebar diff tab. */
+    function openDiffTab(tabInfo, params) {
+      const openTab = tabInfo?.tab?.actions?.openTab
+      if (typeof openTab !== 'function') return false
+      tabInfo.tab.actions.openTab(DIFF_KIND, { params })
+      return true
+    }
+
+    /** Build a stable, always-expanded folder tree from repository-relative paths. */
+    function makeFileTree(files = []) {
+      const root = { name: '', folders: new Map(), files: [] }
+      for (const file of files) {
+        const path = String(file.path ?? '')
+        if (!path) continue
+        const parts = path.split('/').filter(Boolean)
+        let node = root
+        parts.slice(0, -1).forEach(name => {
+          if (!node.folders.has(name)) node.folders.set(name, { name, folders: new Map(), files: [] })
+          node = node.folders.get(name)
+        })
+        node.files.push({ ...file, path })
+      }
+      return root
+    }
+
+    function compactTreeFolder(folder) {
+      let node = folder
+      const names = [node.name]
+      while (node.files.length === 0 && node.folders.size === 1) {
+        node = [...node.folders.values()][0]
+        names.push(node.name)
+      }
+      return { node, name: names.join('/') }
+    }
+
+    function fileStatus(file) {
+      const code = String(file.status || '?')[0].toUpperCase()
+      return { code, title: ({ M: 'Modified', A: 'Added', D: 'Deleted', R: 'Renamed', C: 'Copied', U: 'Unmerged', '?': 'Untracked' })[code] || file.status || 'Changed' }
+    }
+
+    function changeCounts(file) {
+      const added = file.added ?? file.additions ?? file.insertions
+      const removed = file.removed ?? file.deletions ?? file.deletionsCount
+      return Number.isFinite(Number(added)) || Number.isFinite(Number(removed))
+        ? h('span', { className: 'gg-file-counts' }, Number.isFinite(Number(added)) ? `+${Number(added)}` : '', ' ', Number.isFinite(Number(removed)) ? `−${Number(removed)}` : '')
+        : null
+    }
+
+    function ChangedTree({ files = [], onOpen, empty = 'No changed files.' }) {
+      const tree = React.useMemo(() => makeFileTree(files), [files])
+      const renderNode = (node, prefix = '') => {
+        const folders = [...node.folders.values()].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+        const entries = [...node.files].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0)
+        return [...folders.map(folder => {
+          const compact = compactTreeFolder(folder)
+          return h('div', { key: `${prefix}${compact.name}/`, className: 'gg-tree-folder' },
+            h('div', { className: 'gg-tree-folder-name', title: `${prefix}${compact.name}/` }, h('span', { className: 'gg-tree-chevron' }, '▾'), compact.name),
+            h('div', { className: 'gg-tree-children' }, renderNode(compact.node, `${prefix}${compact.name}/`)))
+        }),
+        ...entries.map(file => {
+          const status = fileStatus(file)
+          const title = file.oldPath ? `${file.oldPath} → ${file.path}` : file.path
+          return h('button', { key: `${prefix}${file.path}:${file.group || ''}`, type: 'button', className: 'gg-file gg-tree-file', title,
+            onClick: () => onOpen?.(file),
+          }, h('span', { className: `gg-status gg-status-${status.code}`, 'data-status': status.code, title: status.title }, status.code),
+          h('span', { className: 'gg-path' }, file.oldPath && file.oldPath !== file.path ? `${file.oldPath} → ${file.path}` : file.path), changeCounts(file))
+        })]
+      }
+      const children = renderNode(tree)
+      return h('div', { className: 'gg-tree', role: 'tree' }, children.length ? children : h('div', { className: 'gg-empty' }, empty))
+    }
+
+    /** Files are flat entries {path, oldPath?, status, group?, staged?}; tabs are preferred. */
+    function FileWorkspace({ files = [], sessionId, signal, base, head, mode = 'commits', revision = 0, tabInfo }) {
       const [filter, setFilter] = React.useState('')
       const [selection, setSelection] = React.useState(null)
       const rows = React.useRef(new Map())
@@ -922,6 +1117,9 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
         if (selectedId !== null && (selection?.scope !== scope || selection?.id !== selectedId)) setSelection({ scope, id: selectedId })
       }, [scope, selectedId, selection])
       const pick = (file, focus) => {
+        if (tabInfo) openDiffTab(tabInfo, mode === 'working'
+          ? { mode: 'working', base: 'HEAD', head: '', path: file.path, oldPath: file.oldPath, group: file.group, staged: file.group === 'staged' }
+          : { mode: 'commits', base, head, path: file.path, oldPath: file.oldPath })
         const id = diffFileIdentity(file, mode)
         setSelection({ scope, id })
         if (focus) { const node = rows.current.get(id); node?.focus(); node?.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }
@@ -1303,7 +1501,8 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
         id: DIFF_ID,
         kind: DIFF_KIND,
         priority: 'extension',
-        title: () => 'Diff',
+        multiple: true,
+         title: () => 'Diff',
       },
       {
         id: CHANGES_ID,
@@ -1396,6 +1595,33 @@ https://github.com/highlightjs/highlight.js/issues/2277`),S=o,_=f),g===void 0&&(
 .gg-du-file.is-selected { background: rgba(76, 154, 255, .14); box-shadow: inset 3px 0 var(--dsw-alias-brand-primary); }
 .gg-du-status { flex: none; width: 2ch; font: 600 11px/1.5 ui-monospace, monospace; color: var(--dsw-alias-label-secondary); }
 .gg-du-path { min-width: 0; overflow-wrap: anywhere; line-height: 1.5; font-family: ui-monospace, monospace; }
+
+/* Commit history table and row-local accordion. */
+.gg-column-heading { display: grid; grid-template-columns: 28px minmax(100px, 1fr) 126px 112px 72px; gap: 8px; align-items: center; }
+.gg-row { display: grid; grid-template-columns: 28px minmax(100px, 1fr) 126px 112px 72px; gap: 8px; align-items: center; box-sizing: border-box; padding-left: 8px !important; }
+.gg-row > .gg-row-body { display: contents; }
+.gg-row > .gg-row-body > .gg-description { grid-column: 2; }
+.gg-row > .gg-row-body > .gg-row-meta { display: contents; }
+.gg-row > .gg-row-body > .gg-row-meta > .gg-date { grid-column: 3; }
+.gg-row > .gg-row-body > .gg-row-meta > .gg-author { grid-column: 4; }
+.gg-row > .gg-row-body > .gg-row-meta > .gg-hash { grid-column: 5; }
+.gg-hash { font-family: ui-monospace, monospace; color: var(--dsw-alias-label-secondary); }
+.gg-row-stack { position: relative; z-index: 1; }
+.gg-row-stack > .gg-accordion { position: relative; z-index: 3; }
+.gg-accordion { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); min-height: ${ACCORDION_H}px; max-height: ${ACCORDION_H}px; overflow: hidden; border-top: 1px solid var(--dsw-alias-border-l1); border-bottom: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-base); }
+.gg-accordion-meta, .gg-accordion-files { min-width: 0; min-height: 0; overflow: auto; padding: 8px 12px; }
+.gg-accordion-meta { border-right: 1px solid var(--dsw-alias-border-l1); }
+.gg-accordion-files { overscroll-behavior: contain; }
+.gg-accordion-subject { font-weight: 600; font-size: 13px; overflow-wrap: anywhere; margin-bottom: 6px; }
+.gg-tree { min-width: 0; }
+.gg-tree-folder-name { color: var(--dsw-alias-label-secondary); font-weight: 600; padding: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gg-tree-chevron { display: inline-block; width: 14px; color: var(--dsw-alias-label-secondary); }
+.gg-tree-children { padding-left: 14px; }
+.gg-tree-file { width: 100%; border: 0; background: transparent; text-align: left; color: inherit; }
+.gg-tree-file .gg-path { flex: 1; }
+.gg-file-counts { flex: none; font-family: ui-monospace, monospace; font-size: 10px; color: var(--dsw-alias-label-secondary); white-space: nowrap; }
+.gg-working-group + .gg-working-group { border-top: 1px solid var(--dsw-alias-border-l1); margin-top: 8px; padding-top: 4px; }
+@media (max-width: 620px) { .gg-column-heading, .gg-row { grid-template-columns: 28px minmax(0, 1fr) 72px; gap: 5px; } .gg-column-heading span:nth-child(4), .gg-column-heading span:nth-child(5), .gg-row .gg-author, .gg-row .gg-hash { display: none; } .gg-column-heading span:nth-child(3), .gg-row .gg-date { grid-column: 3; } .gg-accordion { grid-template-columns: 1fr; overflow: auto; } .gg-accordion-meta { border-right: 0; border-bottom: 1px solid var(--dsw-alias-border-l1); max-height: 150px; } }
 
 .gg-host { display: flex; flex-direction: column; height: 100%; min-height: 0;
   font-size: 12px; color: var(--dsw-alias-label-primary); }
