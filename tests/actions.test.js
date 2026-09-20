@@ -874,3 +874,52 @@ test('revert and cherry-pick really change the tree they act on', async () => {
     cleanup()
   }
 })
+
+test('routes are released with the plugin, so a second apply cannot collide', () => {
+  // `register` returns the disposer, and a duplicate (kind, path) throws — so an
+  // apply that keeps no disposer makes the *next* apply fail while the first
+  // one's routes keep serving. That is a plugin that reports itself broken and
+  // answers every request from a stale generation.
+  const registered = []
+  const context = {
+    webServer: {
+      register(route) {
+        if (registered.some(entry => entry.kind === route.kind && entry.path === route.path)) {
+          throw new Error(`duplicate route ${route.kind} ${route.path}`)
+        }
+        registered.push(route)
+        return () => {
+          const at = registered.indexOf(route)
+          if (at >= 0) registered.splice(at, 1)
+        }
+      },
+    },
+  }
+  const release = internals.registerRoutes(context)
+  assert.deepEqual(registered.map(route => route.path), ['/api/dsh-git-graph', '/api/dsh-git-graph/events'])
+
+  // Applying again while the first is live is the collision the row would hit.
+  assert.throws(() => internals.registerRoutes(context), /duplicate route/)
+
+  release()
+  assert.deepEqual(registered, [], 'releasing ends the registration')
+  // …and once released, the same row can be applied again, which is exactly
+  // what a reload or a disable-and-enable does.
+  const again = internals.registerRoutes(context)
+  assert.equal(registered.length, 2)
+  again()
+  assert.equal(registered.length, 0)
+
+  // A half-finished apply must not leave its first route behind either.
+  const failing = {
+    webServer: {
+      register(route) {
+        if (route.path === '/api/dsh-git-graph/events') throw new Error('collision')
+        registered.push(route)
+        return () => { registered.splice(registered.indexOf(route), 1) }
+      },
+    },
+  }
+  assert.throws(() => internals.registerRoutes(failing), /collision/)
+  assert.deepEqual(registered, [], 'the route registered before the failure is released')
+})
