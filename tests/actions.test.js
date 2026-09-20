@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { internals } from '../lib/index.js'
@@ -473,6 +473,46 @@ test('the commits operation reports and applies the filter through dispatch', as
       () => internals.dispatch(ctx, { op: 'commits', sessionId: 'session', limit: 20, ref: '--all' }),
       /refusing ref/,
     )
+  } finally {
+    cleanup()
+  }
+})
+
+test('a file git does not track is deleted rather than restored', async () => {
+  const { root, cleanup } = fixture()
+  try {
+    // `checkout --` refuses all three of these, which is why they have their
+    // own actions: an untracked file, an untracked directory, and a file that
+    // was staged but never committed.
+    writeFileSync(join(root, 'loose.txt'), 'untracked\n')
+    writeFileSync(join(root, 'added.txt'), 'staged\n')
+    git(root, 'add', 'added.txt')
+    mkdirSync(join(root, 'dir'), { recursive: true })
+    writeFileSync(join(root, 'dir', 'inner.txt'), 'inner\n')
+
+    // The plan names the path, and running it removes exactly that path.
+    const planned = await planOf(root, 'working.clean', { paths: ['loose.txt'] })
+    assert.deepEqual(planned.argv, ['clean', '-f', '--', 'loose.txt'])
+    assert.equal(planned.destructive, true)
+    await internals.runAction(root, { action: 'working.clean', params: { paths: ['loose.txt'] } })
+    assert.equal(existsSync(join(root, 'loose.txt')), false)
+    assert.equal(existsSync(join(root, 'added.txt')), true, 'a named path must not take its neighbours with it')
+
+    // A named directory goes without `-d`, which is what git does.
+    await internals.runAction(root, { action: 'working.clean', params: { paths: ['dir'] } })
+    assert.equal(existsSync(join(root, 'dir')), false)
+
+    // A staged addition is taken out of the index and off the disk.
+    assert.equal(git(root, 'status', '--porcelain'), 'A  added.txt')
+    const removal = await planOf(root, 'working.remove', { paths: ['added.txt'] })
+    assert.deepEqual(removal.argv, ['rm', '-f', '--', 'added.txt'])
+    await internals.runAction(root, { action: 'working.remove', params: { paths: ['added.txt'] } })
+    assert.equal(existsSync(join(root, 'added.txt')), false)
+    assert.equal(git(root, 'status', '--porcelain'), '')
+
+    // And the restore path still refuses a path outside the repository.
+    await assert.rejects(() => planOf(root, 'working.clean', { paths: ['../escape'] }), /inside the repository/)
+    await assert.rejects(() => planOf(root, 'working.remove', { paths: [] }), /file paths is required/)
   } finally {
     cleanup()
   }

@@ -391,11 +391,38 @@ export function workingActions() {
 /**
  * The action one changed file offers.
  *
- * @param file - the file entry: its path and the group it was read from.
+ * Which action that is depends on where the file stands, and getting it wrong
+ * is not cosmetic: `git checkout --` refuses a file git does not track at all,
+ * and refuses a file that was added to the index but never committed, because
+ * neither has an earlier version to restore from. Those two are therefore
+ * removed rather than restored, and each dialog says so.
+ *
+ * @param file - the file entry: its path, its status and the group it came from.
  * @returns the menu entries.
  */
 export function fileActions(file) {
   const staged = file.group === 'staged' || file.staged === true
+  const untracked = file.group === 'untracked' || file.status === '?'
+  if (untracked) {
+    return [{
+      action: 'working.clean',
+      label: `Delete ${file.path}…`,
+      title: `Delete ${file.path}`,
+      note: 'Git does not track this file, so there is no earlier version to restore it from.',
+      danger: true,
+      params: { paths: [file.path] },
+    }]
+  }
+  if (staged && file.status === 'A') {
+    return [{
+      action: 'working.remove',
+      label: `Unstage and delete ${file.path}…`,
+      title: `Unstage and delete ${file.path}`,
+      note: 'The file was added but never committed, so there is no earlier version to restore it from.',
+      danger: true,
+      params: { paths: [file.path] },
+    }]
+  }
   return [
     {
       action: 'working.discard',

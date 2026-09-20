@@ -3,7 +3,7 @@ import { runInNewContext } from 'node:vm'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import * as GitSyntax from '../src/client/syntax.js'
-import { commitActions, describeBadge, initialValues, missingFields, paramsFor, refActions } from '../src/client/actions.js'
+import { commitActions, describeBadge, fileActions, initialValues, missingFields, paramsFor, refActions } from '../src/client/actions.js'
 import { matchesFilter } from '../src/client/graph-ui.js'
 import { diffFileIdentity, parseUnifiedPatch, planSplitRows, resolveDiffLayout } from '../src/client/diff-layout.js'
 
@@ -1090,4 +1090,31 @@ test('a marking survives a visit to another tab, the way an open accordion does'
   await other.settle()
   assert.equal(find(other.tree, node => node.props.className === 'gg-compare-bar'), undefined)
   other.unmount()
+})
+
+test('a file’s action matches where the file stands', () => {
+  // Git refuses `checkout --` for a file it does not track and for one that was
+  // staged but never committed; both are removed instead, and each dialog says
+  // why rather than failing with a message about a pathspec.
+  const untracked = fileActions({ path: 'loose.txt', status: '?', group: 'untracked' })
+  assert.deepEqual(untracked.map(entry => entry.action), ['working.clean'])
+  assert.match(untracked[0].label, /^Delete loose\.txt/)
+  assert.match(untracked[0].note, /does not track/)
+  assert.equal(untracked[0].danger, true)
+
+  const added = fileActions({ path: 'added.txt', status: 'A', group: 'staged' })
+  assert.deepEqual(added.map(entry => entry.action), ['working.remove'])
+  assert.match(added[0].label, /Unstage and delete added\.txt/)
+  assert.equal(added[0].danger, true)
+
+  // Everything else is restored, from the index or from HEAD depending on
+  // whether it is staged.
+  const unstaged = fileActions({ path: 'a.txt', status: 'M', group: 'unstaged' })
+  assert.deepEqual(unstaged.map(entry => entry.action), ['working.discard'])
+  const unstagedSource = [...unstaged[0].fields].find(field => field.name === 'source')
+  assert.equal(unstagedSource.initial, 'index')
+
+  const staged = fileActions({ path: 'a.txt', status: 'M', group: 'staged' })
+  const stagedSource = [...staged[0].fields].find(field => field.name === 'source')
+  assert.equal(stagedSource.initial, 'head')
 })

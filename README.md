@@ -208,11 +208,26 @@ Together they cover dark/light and 400px/1440px layouts, computed status colors,
 actual screenshot pixels for graph hover/selection, syntax toggling, escaped
 source, metadata disclosure, keyboard and pointer resizing, selected-row
 visibility after shrinking, inline navigation, selection preservation,
-partially staged files, deleted/binary states, hunk navigation, wrap toggling
-and browser exceptions. Screenshots and machine-readable results go to `test-artifacts/`
+partially staged files, deleted/binary states, hunk navigation, wrap toggling,
+the branch filter, the find box, opening and clearing a comparison, and browser
+exceptions. Screenshots and machine-readable results go to `test-artifacts/`
 (ignored by Git). This complements, but does not verify, live DSH routing/HMR or
 its exact theme/Slot implementation. All browser processes and temp repositories
 are cleaned up at test completion.
+
+### Is the *running* harness up to date?
+
+```sh
+DSH_SESSION_ID=<a live session> npm run test:live
+```
+
+The suites above test the plugin; this one tests the deployment. A host row is
+composed at startup, so a change to `lib/index.js` is invisible until the harness
+restarts — and "it works in the tests" is exactly the wrong answer to whether the
+page in front of you has it. `scripts/smoke-live.mjs` reads and *plans* against
+the route the running page uses and never runs a writing action, so it cannot
+disturb a repository that has work in it. Exit code `2` means the route is live
+but older than this working tree.
 
 ## Development notes
 
