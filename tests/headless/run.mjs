@@ -278,6 +278,63 @@ try {
   await frame()
   check('Clearing the comparison removes the bar', await page.locator('.gg-compare-bar').count() === 0)
 
+  // The writing actions in a real browser: the menu, the dialog, and the exact
+  // command the host would run. Every one of these is cancelled, so the fixture
+  // repository must come out of this section byte for byte as it went in.
+  const beforeWrites = execFileSync('git', ['-C', dir, 'status', '--porcelain=v2'], { encoding: 'utf8' })
+  await page.locator('.gg-row').nth(2).click({ button: 'right' })
+  await page.locator('.gg-menu').waitFor({ timeout: 5000 })
+  const commitMenu = await page.locator('.gg-menu-item').allInnerTexts()
+  check('Right-clicking a commit offers the writing actions',
+    commitMenu.includes('Create branch here…') && commitMenu.includes('Cherry-pick onto this branch') && commitMenu.includes('Copy commit hash'))
+  await page.getByRole('menuitem', { name: 'Create branch here…' }).click()
+  await page.locator('.gg-dialog').waitFor({ timeout: 5000 })
+  check('Choosing one opens a confirmation dialog', (await text('.gg-dialog-title')).includes('Create a branch at'))
+  check('The dialog will not run while a required field is empty', await page.locator('.gg-dialog button[type=submit]').isDisabled())
+  await page.locator('.gg-dialog input[type=text]').first().fill('probe/branch')
+  await page.locator('.gg-argv').waitFor({ timeout: 5000 })
+  check('The dialog shows the command the host would run', (await text('.gg-argv')).includes('git checkout -b probe/branch'))
+  check('Once the field is filled the action can be confirmed', !(await page.locator('.gg-dialog button[type=submit]').isDisabled()))
+  check('The dialog names where the repository stands', /on \w+ · /.test(await text('.gg-dialog-state')))
+  await page.getByRole('button', { name: 'Cancel' }).click()
+  await page.locator('.gg-dialog').waitFor({ state: 'detached', timeout: 5000 })
+  check('Cancelling runs nothing',
+    execFileSync('git', ['-C', dir, 'status', '--porcelain=v2'], { encoding: 'utf8' }) === beforeWrites
+    && git('branch', '--list', 'probe/branch') === '')
+
+  // Escape is the other way out, and it must work while the field has focus.
+  await page.locator('.gg-row').nth(2).click({ button: 'right' })
+  await page.locator('.gg-menu').waitFor({ timeout: 5000 })
+  await page.getByRole('menuitem', { name: 'Revert this commit' }).click()
+  await page.locator('.gg-dialog').waitFor({ timeout: 5000 })
+  await page.keyboard.press('Escape')
+  await page.locator('.gg-dialog').waitFor({ state: 'detached', timeout: 5000 })
+  check('Escape closes the dialog without running anything',
+    execFileSync('git', ['-C', dir, 'status', '--porcelain=v2'], { encoding: 'utf8' }) === beforeWrites)
+
+  // A file's own action depends on where that file stands.
+  if (await page.locator('.gg-accordion[aria-label="Uncommitted changes"]').count() === 0) {
+    await page.locator('.gg-row').first().click()
+  }
+  await waitAccordion('Uncommitted changes')
+  await page.locator('.gg-accordion .gg-tree-file[title="untracked.txt"]').click({ button: 'right' })
+  await page.locator('.gg-menu').waitFor({ timeout: 5000 })
+  const fileMenu = await page.locator('.gg-menu-item').allInnerTexts()
+  check('An untracked file is offered for deletion, not for restore',
+    fileMenu.some(label => label.startsWith('Delete untracked.txt')) && !fileMenu.some(label => /Discard/.test(label)))
+  // Escape closes a menu wherever focus happens to be, which is what a reader
+  // reaches for first — and the press that opened the menu must not close it.
+  await page.keyboard.press('Escape')
+  await frame()
+  check('Escape closes the file menu', await page.locator('.gg-menu').count() === 0)
+  await page.locator('.gg-row').nth(2).click({ button: 'right' })
+  await page.locator('.gg-menu').waitFor({ timeout: 5000 })
+  await page.keyboard.press('Escape')
+  await frame()
+  check('Escape closes the commit menu too', await page.locator('.gg-menu').count() === 0)
+  check('Closing the menus ran nothing',
+    execFileSync('git', ['-C', dir, 'status', '--porcelain=v2'], { encoding: 'utf8' }) === beforeWrites)
+
   // The reported case, end to end: a commit lands in the repository while the
   // graph is open, and nobody touches the view.
   await page.setViewportSize({ width: 1440, height: 900 })

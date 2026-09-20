@@ -200,7 +200,7 @@ HTTP server, logged-in profile or DSH restart is needed. All scenarios run
 against a temporary repository that the test creates and removes; nothing of
 yours is read or written unless you ask for it.
 
-63 checks run out of the box. Setting `GRAPH_TEST_REPO` to a repository with a
+75 checks run out of the box. Setting `GRAPH_TEST_REPO` to a repository with a
 large branching history adds 3 more that exercise real lane routing and real
 working-tree reads on that history, which is only ever read.
 
@@ -209,8 +209,9 @@ actual screenshot pixels for graph hover/selection, syntax toggling, escaped
 source, metadata disclosure, keyboard and pointer resizing, selected-row
 visibility after shrinking, inline navigation, selection preservation,
 partially staged files, deleted/binary states, hunk navigation, wrap toggling,
-the branch filter, the find box, opening and clearing a comparison, and browser
-exceptions. Screenshots and machine-readable results go to `test-artifacts/`
+the branch filter, the find box, opening and clearing a comparison, the action
+menus and the confirmation dialog (cancelled, so nothing is written), and
+browser exceptions. Screenshots and machine-readable results go to `test-artifacts/`
 (ignored by Git). This complements, but does not verify, live DSH routing/HMR or
 its exact theme/Slot implementation. All browser processes and temp repositories
 are cleaned up at test completion.

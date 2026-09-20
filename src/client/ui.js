@@ -161,6 +161,14 @@ export function GuideGlyph({ size }) {
  */
 export function ContextMenu({ menu, actions = [], onAction, markers, onClose, onOpenCommit, onCompare, onCompareSelected, onFlash }) {
   const ref = React.useRef(null)
+  // The menu's own caller hands it a fresh `onClose` on every render. Keeping
+  // the listener's dependencies on that identity would tear the listener down
+  // and re-arm its timer on every render — and a menu that renders again before
+  // the timer fires would end up with no listener at all, which is a menu that
+  // cannot be closed. The ref carries the newest closer to a listener that is
+  // installed exactly once.
+  const close = React.useRef(onClose)
+  close.current = onClose
 
   // A menu that outlives the press that dismissed it would sit over the
   // graph, so any press outside it closes it.
@@ -172,26 +180,27 @@ export function ContextMenu({ menu, actions = [], onAction, markers, onClose, on
   // another row close this menu and open the next one, which is what a
   // reader expects from a context menu.
   React.useEffect(() => {
-    const dismiss = (event) => {
-      if (event.type === 'keydown' && event.key !== 'Escape') return
-      if (event.type !== 'keydown' && ref.current !== null && ref.current.contains(event.target)) return
-      onClose()
+    const onKey = (event) => { if (event.key === 'Escape') close.current() }
+    const onPress = (event) => {
+      if (ref.current !== null && ref.current.contains(event.target)) return
+      close.current()
     }
-    // Only presses and Escape close it. A `contextmenu` listener would
-    // close the menu on the very press that opened it, because the press is
-    // still travelling to the document when this effect runs — and it would
-    // also close the menu the moment a row's own handler opened the next
-    // one, since both handlers see the same event.
-    const timer = setTimeout(() => {
-      document.addEventListener('mousedown', dismiss)
-      document.addEventListener('keydown', dismiss)
-    }, 0)
+    // Escape is listened for from the start: no key press opened this menu, so
+    // there is no event in flight that could close it again.
+    document.addEventListener('keydown', onKey)
+    // A press is different. The press that opened the menu is still travelling
+    // to the document while this effect runs, so a listener registered now
+    // would receive that same press and close the menu in the same breath.
+    // Waiting one task lets a right-click on another row close this menu and
+    // open the next one, which is what a reader expects. A `contextmenu`
+    // listener would have the same problem as the immediate one.
+    const timer = setTimeout(() => document.addEventListener('mousedown', onPress), 0)
     return () => {
       clearTimeout(timer)
-      document.removeEventListener('mousedown', dismiss)
-      document.removeEventListener('keydown', dismiss)
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('mousedown', onPress)
     }
-  }, [onClose])
+  }, [])
 
   const commit = menu.commit
   const target = menu.ref
