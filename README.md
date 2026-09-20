@@ -112,16 +112,37 @@ dialog shows that list before anything runs.
 Three rules keep an action from surprising the agent working in the same tree:
 
 - Nothing runs while a Git operation is half-finished (`MERGE_HEAD`,
-  `REBASE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`) or while
-  `.git/index.lock` exists. The way *out* of the operation that is running is
-  offered instead, as a banner above the graph.
+  `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`, or the `rebase-merge` /
+  `rebase-apply` directory — the latter shared with `git am`, which is told
+  apart by its own `applying` file), or while `.git/index.lock` exists. The way
+  *out* of the operation that is running is offered instead, as a banner above
+  the graph: continue, skip or abort for a merge, rebase, cherry-pick, revert or
+  patch application, and end-the-bisect for a bisect.
 - Writes are queued per repository, so two clicks cannot race each other for the
-  index. Git's own locking still arbitrates with everyone else.
+  index, and the repository is asked again *inside* that queue — an action can
+  wait behind another one, and what has to hold is that the tree was fit for it
+  when it ran, not when it was requested. Git's own locking still arbitrates
+  with everyone else.
 - A dirty working tree is a warning, not a refusal: git decides which changes a
   checkout may carry across, and the dialog says what the tree holds first.
 
-`--force-with-lease` is used instead of `--force`, and no action ever passes a
-name or a path that starts with `-` to git in an argument position.
+`--force-with-lease` is used instead of `--force`. No action passes a name or a
+path that starts with `-` to git in an argument position, from any direction:
+branch and tag names are checked with git's own `check-ref-format`, paths are
+refused when they are absolute or walk upwards, a remote must be one the
+repository reports *and* must not begin with `-`, and a stash is addressed by a
+whole number rather than by a revision expression. A branch travels as a full
+refspec (`refs/heads/x:refs/heads/x`) because a branch called `+foo` is legal
+and is also how git spells a forced push.
+
+Two limits worth stating plainly. Network actions — fetch, push, pull — run the
+repository's own transport configuration, exactly as a terminal would: a
+repository that sets `remote.<name>.uploadpack` or a custom `url` has that
+program run when the action does. The plugin validates what *it* passes to git;
+it does not sandbox git itself. And a fetch is the one action that asks nothing
+first, because it changes only what this repository knows about the remote — if
+that is not the trade you want, do not fetch from a repository you do not
+trust.
 
 - **Branches** — check out, create (at HEAD, a commit or a ref), rename, delete
   (`-D` only when asked), merge (`--no-ff` when asked), rebase, reset
@@ -132,8 +153,10 @@ name or a path that starts with `-` to git in an argument position.
 - **Commits** — check out (detached), cherry-pick, revert, reset the branch to
   it, and create a branch or a tag at it.
 - **Working tree** — stash (with a message, untracked files, or keeping the
-  index), discard one file's changes (from the index or from HEAD), reset
-  everything (mixed or hard), remove untracked files.
+  index), discard one file's changes (from the index or from HEAD), undo a
+  rename (three commands, because no single one does it), reset everything
+  (mixed or hard), remove untracked files, and delete a file git does not track
+  or one that was staged but never committed.
 - **Stashes** — apply, pop, drop, and start a branch from one.
 - **Remote** — fetch, with `--prune` when asked.
 

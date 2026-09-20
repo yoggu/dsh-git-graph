@@ -80,10 +80,13 @@ test('a force push leases rather than overrides', async () => {
   try {
     git(root, 'remote', 'add', 'origin', 'https://example.invalid/repo.git')
     assert.deepEqual(await argvOf(root, 'branch.push', { remote: 'origin', branch: 'main', force: true }),
-      ['push', '--force-with-lease', 'origin', 'main'])
-    // A remote that is not configured never reaches the argument list.
-    await assert.rejects(() => argvOf(root, 'branch.push', { remote: '-oProxyCommand=sh', branch: 'main' }),
+      ['push', '--force-with-lease', 'origin', 'refs/heads/main:refs/heads/main'])
+    // A remote that is not configured never reaches the argument list, and one
+    // whose name git would read as an option is refused even earlier.
+    await assert.rejects(() => argvOf(root, 'branch.push', { remote: 'elsewhere', branch: 'main' }),
       /not a configured remote/)
+    await assert.rejects(() => argvOf(root, 'branch.push', { remote: '-oProxyCommand=sh', branch: 'main' }),
+      /refusing remote/)
   } finally {
     cleanup()
   }
@@ -556,6 +559,8 @@ test('every action a menu can offer is one the host can plan', async () => {
       ...operationActions({ operation: 'rebase' }),
       ...operationActions({ operation: 'cherryPick' }),
       ...operationActions({ operation: 'revert' }),
+      ...operationActions({ operation: 'am' }),
+      ...operationActions({ operation: 'bisect' }),
     ]
     assert.ok(offered.length >= 30, `expected a full vocabulary, got ${offered.length}`)
     for (const entry of offered) {
@@ -575,6 +580,296 @@ test('every action a menu can offer is one the host can plan', async () => {
     ]) {
       assert.ok(ids.has(required), `${required} must be reachable from a menu`)
     }
+  } finally {
+    cleanup()
+  }
+})
+
+test('an action queued behind another re-checks the repository before it runs', async () => {
+  const { root, cleanup } = fixture()
+  try {
+    git(root, 'tag', 'victim')
+    git(root, 'checkout', '-q', '-b', 'feature')
+    writeFileSync(join(root, 'a.txt'), 'feature\n')
+    git(root, 'commit', '-qam', 'Feature')
+    git(root, 'checkout', '-q', 'main')
+    writeFileSync(join(root, 'a.txt'), 'main\n')
+    git(root, 'commit', '-qam', 'Main')
+
+    // The queue is held so that both actions pass their state check before
+    // either runs. That window is the whole point: a merge started in it must
+    // still stop the action queued behind it, which is a fact about the
+    // repository at the moment it runs, not at the moment it was requested.
+    let release
+    const held = internals.queueWrite(root, () => new Promise(resolve => { release = resolve }))
+    const merging = internals.runAction(root, { action: 'branch.merge', params: { name: 'feature' } })
+    const deleting = internals.runAction(root, { action: 'tag.delete', params: { name: 'victim' } })
+    await new Promise(resolve => setTimeout(resolve, 50))
+    release()
+    const [merged, deleted] = await Promise.allSettled([merging, deleting])
+    await held
+
+    assert.equal(merged.status, 'rejected', 'the merge conflicts, as the fixture intends')
+    assert.equal(deleted.status, 'rejected', 'a tag must not be deleted while a merge is half-finished')
+    assert.match(deleted.reason.message, /merge is in progress/)
+    assert.equal(git(root, 'tag', '--list', 'victim'), 'victim')
+  } finally {
+    cleanup()
+  }
+})
+
+test('a name git would read as an option is refused wherever it would appear', async () => {
+  const { root, cleanup } = fixture()
+  try {
+    // A repository is untrusted input, and its configuration can name a remote
+    // anything — including something git reads as an option. `git push --force
+    // main` really does parse as "force, then a remote called main", which is
+    // how a bare name would bypass the force checkbox.
+    git(root, 'config', 'remote.--force.url', 'https://example.invalid/x.git')
+    git(root, 'config', 'remote.--force.fetch', '+refs/heads/*:refs/remotes/x/*')
+    assert.ok(git(root, 'remote').split('\n').includes('--force'), 'git really does list it')
+
+    await assert.rejects(() => planOf(root, 'branch.push', { remote: '--force', branch: 'main' }),
+      /refusing remote/)
+    await assert.rejects(() => planOf(root, 'branch.pull', { remote: '--force' }), /refusing remote/)
+    await assert.rejects(() => planOf(root, 'branch.fetchIntoLocal', { remote: '--force', branch: 'main' }),
+      /refusing remote/)
+    await assert.rejects(() => planOf(root, 'tag.push', { name: 'v1', remote: '--force' }), /refusing remote/)
+
+    // …and the browser is never offered it in the first place.
+    const refs = await internals.listRefs(root)
+    assert.ok(!refs.remotes.includes('--force'))
+  } finally {
+    cleanup()
+  }
+})
+
+test('a branch is pushed by full refspec, so its name cannot force anything', async () => {
+  const { root, cleanup } = fixture()
+  try {
+    git(root, 'remote', 'add', 'origin', 'https://example.invalid/repo.git')
+    // `+foo` is a legal branch name and the spelling of a forced refspec at the
+    // same time; with a bare name, pushing it without the force checkbox would
+    // force the remote anyway.
+    assert.equal(git(root, 'check-ref-format', '--branch', '+foo'), '+foo')
+    const pushed = await planOf(root, 'branch.push', { remote: 'origin', branch: '+foo' })
+    assert.deepEqual(pushed.argv, ['push', 'origin', 'refs/heads/+foo:refs/heads/+foo'])
+    assert.equal(pushed.destructive, false, 'nothing about that push is forced')
+
+    const fetched = await planOf(root, 'branch.fetchIntoLocal', { remote: 'origin', branch: '+foo', force: true })
+    assert.deepEqual(fetched.argv, ['fetch', 'origin', '+refs/heads/+foo:refs/heads/+foo'])
+  } finally {
+    cleanup()
+  }
+})
+
+test('a held lock stops the way out of an operation too', async () => {
+  const { root, cleanup } = fixture()
+  try {
+    writeFileSync(join(root, '.git', 'MERGE_HEAD'), `${'a'.repeat(40)}\n`)
+    writeFileSync(join(root, '.git', 'index.lock'), '')
+    const state = await internals.repositoryState(root)
+    assert.equal(state.operation, 'merge')
+    assert.equal(state.locked, true)
+    // Both would write the index, so git would refuse them a moment later
+    // anyway — with a message about a lock file instead of about the merge.
+    for (const action of ['merge.abort', 'branch.checkout', 'stash.apply']) {
+      const plan = await planOf(root, action, action === 'branch.checkout' ? { name: 'main' } : action === 'stash.apply' ? { index: 0 } : {})
+      assert.throws(() => internals.assertActionAllowed(plan, state), /another Git process is writing/)
+    }
+  } finally {
+    cleanup()
+  }
+})
+
+test('an interrupted patch application is named as one, and has its own ways out', async () => {
+  const { root, cleanup } = fixture()
+  try {
+    // `git am` and a plain `git rebase` share `rebase-apply`; only the first
+    // leaves an `applying` file, and `git rebase --abort` is not the command
+    // that ends it.
+    execFileSync('git', ['-C', root, 'update-ref', 'HEAD', git(root, 'rev-parse', 'HEAD')], { encoding: 'utf8' })
+    mkdirSync(join(root, '.git', 'rebase-apply'), { recursive: true })
+    writeFileSync(join(root, '.git', 'rebase-apply', 'applying'), '')
+    const am = await internals.repositoryState(root)
+    assert.equal(am.operation, 'am')
+
+    for (const action of ['am.continue', 'am.skip', 'am.abort']) {
+      const plan = await planOf(root, action, {})
+      assert.equal(plan.argv[0], 'am')
+      internals.assertActionAllowed(plan, am)
+    }
+    // A rebase action does not belong to it, and says so by name.
+    const rebase = await planOf(root, 'rebase.abort', {})
+    assert.throws(() => internals.assertActionAllowed(rebase, am), /does not belong to the git am/)
+
+    // Without the `applying` file it is a rebase, as before.
+    rmSync(join(root, '.git', 'rebase-apply', 'applying'))
+    assert.equal((await internals.repositoryState(root)).operation, 'rebase')
+
+    // A bisect offers the one thing that ends it.
+    rmSync(join(root, '.git', 'rebase-apply'), { recursive: true, force: true })
+    writeFileSync(join(root, '.git', 'BISECT_LOG'), '')
+    const bisecting = await internals.repositoryState(root)
+    assert.equal(bisecting.operation, 'bisect')
+    const reset = await planOf(root, 'bisect.reset', {})
+    assert.deepEqual(reset.argv, ['bisect', 'reset'])
+    internals.assertActionAllowed(reset, bisecting)
+  } finally {
+    cleanup()
+  }
+})
+
+test('a stash position must be a whole number, not something Number() likes', async () => {
+  const { root, cleanup } = fixture()
+  try {
+    for (const value of [null, '', false, true, [], {}, '0x1', '1.5', '-1', 'zwei']) {
+      await assert.rejects(() => planOf(root, 'stash.drop', { index: value }), /stash index/,
+        `${JSON.stringify(value)} must not address a stash`)
+    }
+    // The spellings that really are a position still work: a number, and the
+    // decimal spelling of one, padded or not.
+    assert.deepEqual((await planOf(root, 'stash.drop', { index: 0 })).argv, ['stash', 'drop', 'stash@{0}'])
+    assert.deepEqual((await planOf(root, 'stash.drop', { index: '2' })).argv, ['stash', 'drop', 'stash@{2}'])
+    assert.deepEqual((await planOf(root, 'stash.drop', { index: ' 3 ' })).argv, ['stash', 'drop', 'stash@{3}'])
+  } finally {
+    cleanup()
+  }
+})
+
+test('undoing a rename takes the three commands no single one replaces', async () => {
+  const { root, cleanup } = fixture()
+  try {
+    writeFileSync(join(root, 'old.txt'), 'content\n')
+    git(root, 'add', 'old.txt')
+    git(root, 'commit', '-qm', 'Add a file')
+    git(root, 'mv', 'old.txt', 'new.txt')
+    assert.equal(git(root, 'status', '--porcelain'), 'R  old.txt -> new.txt')
+
+    const plan = await planOf(root, 'working.undorename', { oldPath: 'old.txt', path: 'new.txt' })
+    assert.deepEqual(plan.steps, [
+      ['reset', '-q', 'HEAD', '--', 'old.txt', 'new.txt'],
+      ['checkout', '--', 'old.txt'],
+      ['clean', '-q', '-f', '--', 'new.txt'],
+    ])
+    assert.match(plan.summary, /^git reset -q HEAD -- old\.txt new\.txt\ngit checkout -- old\.txt\ngit clean -q -f -- new\.txt$/)
+
+    // None of them alone would do it, which is why there are three.
+    await assert.rejects(async () => {
+      await planOf(root, 'working.discard', { paths: ['new.txt'], source: 'head' })
+      await internals.runAction(root, { action: 'working.discard', params: { paths: ['new.txt'], source: 'head' } })
+    }, /pathspec|did not match/)
+
+    const result = await internals.runAction(root, { action: 'working.undorename', params: { oldPath: 'old.txt', path: 'new.txt' } })
+    assert.equal(result.action, 'working.undorename')
+    assert.equal(git(root, 'status', '--porcelain'), '', 'the tree is back to HEAD')
+    assert.equal(existsSync(join(root, 'old.txt')), true)
+    assert.equal(existsSync(join(root, 'new.txt')), false)
+  } finally {
+    cleanup()
+  }
+})
+
+test('push, pull and fetch-into-local really move refs against a real remote', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'gg-net-'))
+  const remote = join(base, 'remote.git')
+  const root = join(base, 'work')
+  try {
+    execFileSync('git', ['init', '-q', '--bare', remote])
+    execFileSync('git', ['init', '-q', '-b', 'main', root])
+    git(root, 'config', 'user.name', 'Net Test')
+    git(root, 'config', 'user.email', 'net@example.invalid')
+    writeFileSync(join(root, 'a.txt'), 'one\n')
+    git(root, 'add', '.')
+    git(root, 'commit', '-qm', 'Base')
+    git(root, 'remote', 'add', 'origin', remote)
+    git(root, 'push', '-q', '-u', 'origin', 'main')
+
+    // Push: a local commit reaches the remote.
+    writeFileSync(join(root, 'a.txt'), 'two\n')
+    git(root, 'commit', '-qam', 'Second')
+    await internals.runAction(root, { action: 'branch.push', params: { remote: 'origin', branch: 'main' } })
+    assert.equal(git(remote, 'rev-parse', 'refs/heads/main'), git(root, 'rev-parse', 'HEAD'))
+
+    // Fetch-into-local: a branch that only exists on the remote comes down as a
+    // local branch, which is the whole point of that action.
+    git(root, 'checkout', '-q', '-b', 'topic')
+    writeFileSync(join(root, 'b.txt'), 'b\n')
+    git(root, 'add', '.')
+    git(root, 'commit', '-qm', 'Topic')
+    git(root, 'push', '-q', 'origin', 'topic')
+    git(root, 'checkout', '-q', 'main')
+    git(root, 'branch', '-q', '-D', 'topic')
+    await internals.runAction(root, {
+      action: 'branch.fetchIntoLocal', params: { remote: 'origin', branch: 'topic' },
+    })
+    assert.equal(git(root, 'rev-parse', 'refs/heads/topic'), git(remote, 'rev-parse', 'refs/heads/topic'))
+
+    // Pull: a commit made in another working copy arrives here.
+    const other = join(base, 'other')
+    // `-b main` because a bare repository made by `init` still points HEAD at
+    // `master`, and a clone of it would arrive with an empty working tree.
+    execFileSync('git', ['clone', '-q', '-b', 'main', remote, other])
+    git(other, 'config', 'user.name', 'Elsewhere')
+    git(other, 'config', 'user.email', 'elsewhere@example.invalid')
+    writeFileSync(join(other, 'a.txt'), 'from elsewhere\n')
+    git(other, 'commit', '-qam', 'Elsewhere')
+    git(other, 'push', '-q', 'origin', 'main')
+    await internals.runAction(root, { action: 'branch.pull', params: { remote: 'origin', branch: 'main' } })
+    assert.equal(git(root, 'rev-parse', 'HEAD'), git(remote, 'rev-parse', 'refs/heads/main'))
+    assert.equal(git(root, 'show', 'HEAD:a.txt', '--no-patch').trim() !== '', true)
+
+    // Tags: pushing one publishes it, deleting one removes it locally.
+    git(root, 'tag', 'v1')
+    await internals.runAction(root, { action: 'tag.push', params: { name: 'v1', remote: 'origin' } })
+    assert.equal(git(remote, 'tag', '--list', 'v1'), 'v1')
+    await internals.runAction(root, { action: 'tag.delete', params: { name: 'v1' } })
+    assert.equal(git(root, 'tag', '--list', 'v1'), '')
+
+    // Branches: create, rename and delete, each really taking effect.
+    await internals.runAction(root, { action: 'branch.create', params: { name: 'probe' } })
+    assert.equal(git(root, 'branch', '--list', 'probe'), 'probe')
+    await internals.runAction(root, { action: 'branch.rename', params: { name: 'probe', to: 'probe2' } })
+    assert.equal(git(root, 'branch', '--list', 'probe2'), 'probe2')
+    await internals.runAction(root, { action: 'branch.delete', params: { name: 'probe2' } })
+    assert.equal(git(root, 'branch', '--list', 'probe2'), '')
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+test('revert and cherry-pick really change the tree they act on', async () => {
+  const { root, cleanup } = fixture()
+  try {
+    // A commit on a side branch, to be picked onto the main line.
+    git(root, 'checkout', '-q', '-b', 'side')
+    writeFileSync(join(root, 'picked.txt'), 'picked\n')
+    git(root, 'add', '.')
+    git(root, 'commit', '-qm', 'Pick me')
+    const picked = git(root, 'rev-parse', 'HEAD')
+    git(root, 'checkout', '-q', 'main')
+
+    await internals.runAction(root, { action: 'commit.cherryPick', params: { hash: picked } })
+    assert.equal(existsSync(join(root, 'picked.txt')), true)
+    assert.match(git(root, 'log', '-1', '--format=%s'), /Pick me/)
+
+    // Reverting it takes the file away again, in a commit of its own.
+    const introduced = git(root, 'rev-parse', 'HEAD')
+    await internals.runAction(root, { action: 'commit.revert', params: { hash: introduced } })
+    assert.equal(existsSync(join(root, 'picked.txt')), false)
+    assert.match(git(root, 'log', '-1', '--format=%s'), /^Revert "Pick me"/)
+
+    // A soft reset moves the branch without touching the tree.
+    writeFileSync(join(root, 'a.txt'), 'changed\n')
+    git(root, 'commit', '-qam', 'To be undone')
+    const before = git(root, 'rev-parse', 'HEAD')
+    // The action takes a commit id, not a revision expression — `HEAD^` is
+    // refused, which is the point of `requireHash` — so the parent is resolved
+    // the way a graph row would carry it.
+    const parent = git(root, 'rev-parse', `${before}^`)
+    const result = await internals.runAction(root, { action: 'commit.reset', params: { hash: parent, mode: 'soft' } })
+    assert.equal(result.movedHead, true)
+    assert.equal(git(root, 'status', '--porcelain'), 'M  a.txt', 'the change is staged, not discarded')
   } finally {
     cleanup()
   }

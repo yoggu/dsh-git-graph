@@ -3,7 +3,7 @@ import { runInNewContext } from 'node:vm'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import * as GitSyntax from '../src/client/syntax.js'
-import { commitActions, describeBadge, fileActions, initialValues, missingFields, paramsFor, refActions } from '../src/client/actions.js'
+import { commitActions, describeBadge, fileActions, initialValues, missingFields, operationActions, paramsFor, refActions } from '../src/client/actions.js'
 import { matchesFilter } from '../src/client/graph-ui.js'
 import { diffFileIdentity, parseUnifiedPatch, planSplitRows, resolveDiffLayout } from '../src/client/diff-layout.js'
 
@@ -1166,4 +1166,68 @@ test('a remote badge fetches and prunes from its own menu, without a dialog', as
   assert.equal(find(ui.tree, node => node.type?.name === 'ActionDialog'), undefined,
     'fetching must not open a confirmation dialog')
   ui.unmount()
+})
+
+test('the dialog never confirms a plan that belongs to an earlier keystroke', async () => {
+  const ui = mount('ActionDialog', {
+    request: {
+      action: 'branch.create',
+      title: 'Create a branch',
+      params: {},
+      fields: [{ name: 'name', label: 'Branch name', required: true }],
+    },
+    sessionId: 'one',
+    signal: tabInfo().tab.signal,
+    onClose() {},
+    onDone() {},
+  }, request => Promise.resolve({
+    plan: { summary: `git checkout -b ${request.params.name}` },
+    state: idleState,
+    warnings: [],
+    blocked: null,
+  }))
+  const field = () => nodes(ui.tree).find(node => node.type === 'input' && node.props.type === 'text')
+  const submit = () => nodes(ui.tree).find(node => node.type === 'button' && node.props.type === 'submit')
+
+  field().props.onChange({ target: { value: 'alpha' } })
+  // One settle fires the request, the next lets the answer land and render:
+  // the harness runs effects inside a render pass, and a promise settles in a
+  // microtask that the pass cannot wait for.
+  await ui.settle()
+  await ui.settle()
+  assert.equal(textOf(find(ui.tree, node => node.props.className === 'gg-argv')), 'git checkout -b alpha')
+  assert.equal(submit().props.disabled, false)
+
+  // The keystroke invalidates what is on screen: that command was made for
+  // `alpha`, and confirming now would run the one for `beta`.
+  field().props.onChange({ target: { value: 'beta' } })
+  ui.render()
+  assert.equal(find(ui.tree, node => node.props.className === 'gg-argv'), undefined,
+    'a command planned for other parameters must not stay on screen')
+  assert.equal(submit().props.disabled, true, 'and must not be confirmable')
+
+  await ui.settle()
+  await ui.settle()
+  assert.equal(textOf(find(ui.tree, node => node.props.className === 'gg-argv')), 'git checkout -b beta')
+  assert.equal(submit().props.disabled, false)
+  ui.unmount()
+})
+
+test('a renamed file is offered the undo rather than a restore git would refuse', () => {
+  const entries = fileActions({ path: 'new.txt', oldPath: 'old.txt', status: 'R', group: 'staged' })
+  assert.deepEqual(entries.map(entry => entry.action), ['working.undorename'])
+  assert.deepEqual({ ...entries[0].params }, { oldPath: 'old.txt', path: 'new.txt' })
+  assert.match(entries[0].note, /No single git command/)
+  assert.equal(entries[0].danger, true)
+  // A file with an ordinary change keeps the ordinary discard.
+  assert.deepEqual(fileActions({ path: 'a.txt', status: 'M', group: 'unstaged' }).map(entry => entry.action),
+    ['working.discard'])
+})
+
+test('an interrupted patch application and a bisect each offer their own way out', () => {
+  // `git am` and `git rebase` share a directory but not their commands, and a
+  // bisect otherwise leaves no action at all — a banner with nothing to press.
+  assert.deepEqual(operationActions({ operation: 'am' }).map(entry => entry.action),
+    ['am.continue', 'am.skip', 'am.abort'])
+  assert.deepEqual(operationActions({ operation: 'bisect' }).map(entry => entry.action), ['bisect.reset'])
 })

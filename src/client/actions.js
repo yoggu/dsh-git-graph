@@ -421,6 +421,20 @@ export function workingActions() {
 export function fileActions(file) {
   const staged = file.group === 'staged' || file.staged === true
   const untracked = file.group === 'untracked' || file.status === '?'
+  const renamed = typeof file.oldPath === 'string' && file.oldPath !== '' && file.oldPath !== file.path
+  if (renamed) {
+    // Neither path on its own can be restored: the new one is in no earlier
+    // tree, and putting the old one back would leave the new one behind. The
+    // host runs the three commands that undo a rename between them.
+    return [{
+      action: 'working.undorename',
+      label: `Undo the rename ${file.oldPath} → ${file.path}…`,
+      title: `Undo the rename of ${file.oldPath}`,
+      note: 'No single git command undoes a rename, so this restores the index for both paths, brings the old file back, and removes the new one.',
+      danger: true,
+      params: { oldPath: file.oldPath, path: file.path },
+    }]
+  }
   if (untracked) {
     return [{
       action: 'working.clean',
@@ -489,6 +503,16 @@ export function operationActions(state) {
       { action: 'cherryPick.continue', label: 'Continue the cherry-pick', title: 'Continue the cherry-pick', params: {} },
       { action: 'cherryPick.abort', label: 'Abort the cherry-pick', title: 'Abort the cherry-pick', danger: true, params: {} },
     ]
+  }
+  if (operation === 'am') {
+    return [
+      { action: 'am.continue', label: 'Continue applying patches', title: 'Continue the patch application', params: {} },
+      { action: 'am.skip', label: 'Skip this patch', title: 'Skip the current patch', danger: true, params: {} },
+      { action: 'am.abort', label: 'Abort the patch application', title: 'Abort the patch application', danger: true, params: {} },
+    ]
+  }
+  if (operation === 'bisect') {
+    return [{ action: 'bisect.reset', label: 'End the bisect', title: 'End the bisect', params: {} }]
   }
   if (operation === 'revert') {
     return [

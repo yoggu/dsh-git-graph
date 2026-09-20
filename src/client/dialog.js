@@ -12,6 +12,7 @@ const OPERATION_LABELS = {
   revert: 'revert',
   rebase: 'rebase',
   bisect: 'bisect',
+  am: 'git am',
 }
 
 /**
@@ -63,7 +64,10 @@ export function describeState(state) {
  */
 export function ActionDialog({ request, sessionId, signal, onClose, onDone }) {
   const [values, setValues] = React.useState(() => initialValues(request))
-  const [plan, setPlan] = React.useState(null)
+  // The plan and the parameters it was made for. A plan that belongs to an
+  // earlier keystroke must not be shown next to the command that would run
+  // now, and must not be confirmable either.
+  const [planned, setPlanned] = React.useState(null)
   const [planError, setPlanError] = React.useState(null)
   const [runError, setRunError] = React.useState(null)
   const [running, setRunning] = React.useState(false)
@@ -85,16 +89,16 @@ export function ActionDialog({ request, sessionId, signal, onClose, onDone }) {
 
   React.useEffect(() => {
     if (missing.length > 0) {
-      setPlan(null)
+      setPlanned(null)
       setPlanError(null)
       return undefined
     }
     let active = true
     call({ op: 'plan', sessionId, action: request.action, params }, signal)
-      .then(result => { if (active) { setPlan(result); setPlanError(null) } })
+      .then(result => { if (active) { setPlanned({ key: paramsKey, result }); setPlanError(null) } })
       .catch(error => {
         if (active && error.name !== 'AbortError') {
-          setPlan(null)
+          setPlanned(null)
           setPlanError(String(error.message ?? error))
         }
       })
@@ -102,6 +106,7 @@ export function ActionDialog({ request, sessionId, signal, onClose, onDone }) {
     // `missing.length` and `paramsKey` are the whole of what this depends on.
   }, [paramsKey, missing.length, request.action, sessionId, signal])
 
+  const plan = planned !== null && planned.key === paramsKey ? planned.result : null
   const blocked = plan?.blocked ?? null
   const canRun = plan !== null && blocked === null && missing.length === 0 && !running
 
