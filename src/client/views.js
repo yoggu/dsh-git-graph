@@ -3,7 +3,7 @@ import { call } from './api.js'
 import { EMPTY_TREE } from './constants.js'
 import { DiffPanel } from './diff-view.js'
 import { FileWorkspace } from './files.js'
-import { GitIcon, copyText, formatDate } from './ui.js'
+import { GitIcon, copyText, formatDate, formatRange } from './ui.js'
 
 const h = React.createElement
 
@@ -41,4 +41,46 @@ export function CommitView({ tabInfo, sessionId }) {
 
 export function DiffView({ tabInfo, sessionId }) {
   return h(DiffPanel, { sessionId, signal: tabInfo.tab.signal, params: tabInfo.tab.navigation?.params ?? {} })
+}
+
+/**
+ * The comparison of two revisions.
+ *
+ * This is the question the graph could not answer before: a commit's accordion
+ * always reads that commit against its first parent, while a reader comparing
+ * a feature branch with `main`, a release with HEAD, or a commit with the
+ * working tree is asking about two positions they chose themselves. The file
+ * list comes from one `compare` request, and each file opens the same diff
+ * viewer the rest of the plugin uses, with those two revisions as its sides.
+ *
+ * @param props - the tab's information and the session.
+ * @returns the comparison view.
+ */
+export function CompareView({ tabInfo, sessionId }) {
+  const params = tabInfo.tab.navigation?.params ?? {}
+  const base = typeof params.base === 'string' ? params.base : ''
+  const head = typeof params.head === 'string' ? params.head : ''
+  const signal = tabInfo.tab.signal
+  const revision = params.revision ?? 0
+  const [state, setState] = React.useState({ files: null, error: null })
+  React.useEffect(() => {
+    let active = true
+    setState({ files: null, error: null })
+    // An empty later side is the working tree, which is how the same view
+    // answers "what has changed since that commit".
+    call({ op: 'compare', sessionId, from: base, to: head === '' ? null : head }, signal)
+      .then(result => { if (active) setState({ files: result.files ?? [], error: null }) })
+      .catch(error => {
+        if (active && error.name !== 'AbortError') setState({ files: null, error: String(error.message ?? error) })
+      })
+    return () => { active = false }
+  }, [base, head, sessionId, signal, revision])
+  if (state.error !== null) return h('div', { className: 'gg-error', role: 'alert' }, state.error)
+  if (state.files === null) return h('div', { className: 'gg-empty', role: 'status' }, 'Reading the comparison…')
+  return h('section', { className: 'gg-root gg-inspector', 'aria-label': 'Commit comparison' },
+    h('div', { className: 'gg-diff-summary' },
+      `${state.files.length} changed file${state.files.length === 1 ? '' : 's'} · ${formatRange(base, head)}`),
+    state.files.length === 0
+      ? h('div', { className: 'gg-empty' }, 'These two revisions are identical.')
+      : h(FileWorkspace, { files: state.files, sessionId, signal, base, head, mode: 'commits', tabInfo }))
 }

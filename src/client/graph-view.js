@@ -3,6 +3,7 @@ import { commitActions, describeBadge, operationActions, refActions, stashAction
 import { call } from './api.js'
 import { ACCORDION_H, ACCORDION_MAX_H, ACCORDION_MIN_H, ACCORDION_SPLIT, LANE_W, LANE_X0, ROW_H } from './constants.js'
 import { ActionDialog, operationLabel } from './dialog.js'
+import { openCompareTab } from './files.js'
 import { layout } from './graph-layout.js'
 import { CommitRow, GraphCanvas } from './graph-ui.js'
 import { accordionLayoutBySession, CommitAccordion, openAccordionBySession, WorkingAccordion } from './accordions.js'
@@ -115,6 +116,9 @@ export function GraphView({ tabInfo, sessionId }) {
   const [pending, setPending] = React.useState(null)
   const [notice, setNotice] = React.useState(null)
   const [repo, setRepo] = React.useState(null)
+  // The commits a reader has marked for comparison, oldest mark first. Two at
+  // most: the first is the base, the second the side it is compared against.
+  const [markers, setMarkers] = React.useState([])
   const request = React.useRef(0)
   const noticeTimer = React.useRef(null)
   const graphRef = React.useRef(null)
@@ -251,10 +255,27 @@ export function GraphView({ tabInfo, sessionId }) {
   const selectedIndex = commits.findIndex(commit => commit.hash === selected)
   const expanded = selectedIndex >= 0
   const toggle = commit => selectAccordion(current => current === commit.hash ? null : commit.hash)
+  /**
+   * Mark a commit as one side of a comparison.
+   *
+   * A third mark drops the oldest, so the two that remain are always the two
+   * most recent choices — the alternative, refusing the click, would leave a
+   * reader stuck with a marking they cannot replace.
+   */
+  const markForComparison = React.useCallback(commit => {
+    setMarkers(current => (current.some(entry => entry.hash === commit.hash)
+      ? current.filter(entry => entry.hash !== commit.hash)
+      : [...current, { hash: commit.hash, subject: commit.subject }].slice(-2)))
+  }, [])
+  const openComparison = React.useCallback((base, head) => {
+    if (base === undefined || base === null) return
+    openCompareTab(tabInfo, base, head)
+  }, [tabInfo])
   const laneWidth = Math.max(100, LANE_X0 * 2 + graph.columnCount * LANE_W)
   const rows = graph.rows.map((row, index) => h('div', { key: row.commit.hash, className: 'gg-row-stack' },
-    h(CommitRow, { row, indent: laneWidth, dense: false, remotes: state.refs?.remotes ?? [], stashes: state.stashes ?? [], selected: selected === row.commit.hash,
-      onSelect: toggle, onCompare: toggle,
+    h(CommitRow, { row, indent: laneWidth, dense: false, remotes: state.refs?.remotes ?? [], stashes: state.stashes ?? [],
+      selected: selected === row.commit.hash, comparing: markers.some(entry => entry.hash === row.commit.hash),
+      onSelect: toggle, onCompare: markForComparison,
       onContextMenu: (event, commit) => setMenu({ x: event.clientX, y: event.clientY, commit }),
       onRefContextMenu: (event, badge) => {
         // A detached-HEAD badge names no ref, so it offers no ref actions and
@@ -291,6 +312,20 @@ export function GraphView({ tabInfo, sessionId }) {
       ? h('div', { className: 'gg-op-banner', role: 'status' },
         h('span', { className: 'gg-op-text' }, 'Another Git process is writing to this repository (index.lock). Writes are refused until it finishes.'))
       : null
+  // The comparison a reader is assembling, with the two ways out of it: two
+  // marks compare against each other, one mark compares against the working
+  // tree — the question an agent's uncommitted work raises.
+  const compareBar = markers.length === 0 ? null : h('div', { className: 'gg-compare-bar', role: 'status' },
+    h('span', { className: 'gg-compare-text' }, markers.length === 1
+      ? `Marked ${markers[0].hash.slice(0, 8)} — mark a second commit, or compare it with the working tree`
+      : `${markers[0].hash.slice(0, 8)} → ${markers[1].hash.slice(0, 8)}`),
+    markers.length === 2
+      ? h('button', { type: 'button', className: 'gg-btn', onClick: () => openComparison(markers[0].hash, markers[1].hash) }, 'Compare')
+      : null,
+    markers.length === 1 && repo?.dirty === true
+      ? h('button', { type: 'button', className: 'gg-btn', onClick: () => openComparison(markers[0].hash, '') }, 'Compare with the working tree')
+      : null,
+    h('button', { type: 'button', className: 'gg-btn', onClick: () => setMarkers([]) }, 'Clear'))
   return h('div', { className: 'gg-root gg-workbench' },
     notice ? h('div', { className: 'gg-notice', role: 'status', title: notice.detail ?? undefined }, notice.text) : null,
     h('section', { className: 'gg-root gg-history', style: { '--gg-lane-width': `${laneWidth}px` }, 'aria-label': 'Commit history' },
@@ -316,6 +351,7 @@ export function GraphView({ tabInfo, sessionId }) {
           ),
         h('span', null, 'Description'), h('span', null, 'Date'), h('span', null, 'Author'), h('span', null, 'Commit')),
       banner,
+      compareBar,
       error ? h('div', { className: 'gg-error', role: 'alert' }, error) : null,
       // A working-tree read can fail on its own — a repository whose history is
       // readable but whose working tree is not. Saying so keeps an empty file
@@ -333,7 +369,9 @@ export function GraphView({ tabInfo, sessionId }) {
       menu,
       actions: menuActions,
       onAction: setPending,
-      markers: [],
+      markers: markers.map(entry => entry.hash),
+      onCompare: markForComparison,
+      onCompareSelected: () => openComparison(markers[0]?.hash, markers[1]?.hash),
       onClose: () => setMenu(null),
       onOpenCommit: toggle,
       onFlash: flash,

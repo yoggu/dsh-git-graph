@@ -348,3 +348,73 @@ test('every stash is in the history and named by its position', async () => {
     cleanup()
   }
 })
+
+test('a comparison lists what differs between two revisions, including the working tree', async () => {
+  const { root, cleanup } = fixture()
+  try {
+    // A second commit that adds one file and edits another.
+    writeFileSync(join(root, 'a.txt'), 'one\ntwo\n')
+    writeFileSync(join(root, 'b.txt'), 'new\n')
+    git(root, 'add', '.')
+    git(root, 'commit', '-qm', 'Second')
+    const base = git(root, 'rev-parse', 'HEAD~1')
+    const head = git(root, 'rev-parse', 'HEAD')
+
+    const between = await internals.compareRevisions(root, { from: base, to: head })
+    assert.deepEqual(between.files.map(file => [file.status, file.path]).sort(), [['A', 'b.txt'], ['M', 'a.txt']])
+    assert.deepEqual(
+      [between.files.find(file => file.path === 'b.txt').additions, between.files.find(file => file.path === 'b.txt').deletions],
+      [1, 0],
+    )
+
+    // The same commit, read against its parent, is the answer a commit view
+    // gives — the comparison must agree with it.
+    const detail = await internals.commitDetail(root, head)
+    assert.deepEqual(
+      detail.files.map(file => file.path).sort(),
+      between.files.map(file => file.path).sort(),
+    )
+
+    // Comparing a revision with nothing means comparing it with the working
+    // tree, which is how an agent's uncommitted work is read.
+    writeFileSync(join(root, 'a.txt'), 'one\ntwo\nthree\n')
+    const uncommitted = await internals.compareRevisions(root, { from: head, to: null })
+    assert.deepEqual(uncommitted.files.map(file => [file.status, file.path]), [['M', 'a.txt']])
+
+    // Comparing a revision with itself is empty rather than an error.
+    assert.deepEqual((await internals.compareRevisions(root, { from: head, to: head })).files, [])
+  } finally {
+    cleanup()
+  }
+})
+
+test('the compare and diff operations accept a working-tree side through dispatch', async () => {
+  const { root, cleanup } = fixture()
+  try {
+    const ctx = {
+      get: name => (name === 'sessions'
+        ? { get: id => (id === 'session' ? { header: { cwd: root } } : undefined) }
+        : undefined),
+    }
+    const head = git(root, 'rev-parse', 'HEAD')
+    writeFileSync(join(root, 'a.txt'), 'changed\n')
+
+    const compared = await internals.dispatch(ctx, { op: 'compare', sessionId: 'session', from: head })
+    assert.equal(compared.to, null)
+    assert.deepEqual(compared.files.map(file => file.path), ['a.txt'])
+
+    const patch = await internals.dispatch(ctx, {
+      op: 'diff', sessionId: 'session', from: head, to: null, path: 'a.txt',
+    })
+    assert.match(patch.patch, /^diff --git/)
+    assert.match(patch.patch, /\+changed/)
+
+    // A revision the plugin refuses never reaches git's argument parser.
+    await assert.rejects(
+      () => internals.dispatch(ctx, { op: 'compare', sessionId: 'session', from: '--upload-pack=x' }),
+      /refusing revision/,
+    )
+  } finally {
+    cleanup()
+  }
+})

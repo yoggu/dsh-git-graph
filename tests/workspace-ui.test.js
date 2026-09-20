@@ -71,7 +71,7 @@ function mount(name, initialProps, call = () => Promise.resolve({})) {
     layout: commits => ({ rows: commits.map((commit, row) => ({ commit, row, column: 0, slot: 0 })), edges: [], columnCount: 1 }),
     graphEdgePath: () => '',
     ROW_H: 26, LANE_X0: 12, LANE_W: 12, DOT_R: 4, LANE_COLORS: ['blue'],
-    EMPTY_TREE: 'empty', DIFF_KIND: 'git-diff', ACCORDION_H: 300,
+    EMPTY_TREE: 'empty', DIFF_KIND: 'git-diff', COMPARE_KIND: 'git-compare', ACCORDION_H: 300,
     EVENTS_ROUTE: '/api/dsh-git-graph/events',
     ACCORDION_MIN_H: 180, ACCORDION_MAX_H: 720, ACCORDION_SPLIT: 50,
     openAccordionBySession, accordionLayoutBySession: new Map(),
@@ -96,6 +96,8 @@ function mount(name, initialProps, call = () => Promise.resolve({})) {
   }
 }
 const fileButton = (tree, path) => find(tree, n => n.type === 'button' && n.props.title === path)
+/** The wording of a subtree: `nodes` walks elements, so text is read off them. */
+const textOf = tree => nodes(tree).map(node => (node.children ?? []).filter(child => typeof child === 'string').join(' ')).join(' ')
 const panel = tree => find(tree, n => n.type?.name === 'DiffPanel')
 const accordion = tree => find(tree, n => n.type?.name === 'CommitAccordion')
 const commit = hash => ({ hash, parents: [], subject: hash, refs: [] })
@@ -160,7 +162,7 @@ test('the Git graph guide capsule carries the tab’s branch glyph', () => {
     "const ID = 'git-graph', KIND = 'git-graph'",
     "const COMMIT_ID = 'commit', COMMIT_KIND = 'commit'",
     "const DIFF_ID = 'diff', DIFF_KIND = 'diff'",
-    "const CHANGES_ID = 'changes', CHANGES_KIND = 'changes'",
+    "const COMPARE_ID = 'compare', COMPARE_KIND = 'compare'",
   ].join('\n')
   const tabSource = cleanModule(moduleSource('tabs.js'))
   const slice = tabSource.slice(tabSource.indexOf('const definitions = ['))
@@ -384,13 +386,52 @@ test('all tab bodies reset their child on session or workspace changes', () => {
   }
 })
 
-test('history context menu does not expose removed comparison actions', () => {
-  const ui = mount('ContextMenu', { menu: { x: 100, y: 100, commit: commit('abc') }, markers: [], onClose() {}, onOpenCommit() {}, onFlash() {} })
-  const labels = nodes(ui.tree).filter(n => n.props.role === 'menuitem').map(n => n.children.join(''))
-  assert.equal(labels.length, 4)
-  assert.ok(labels.includes('Open commit details'))
-  assert.ok(labels.every(label => !/compar/i.test(label)))
-  ui.unmount()
+test('comparison appears in the context menu only where the graph wired it', () => {
+  // A caller that offers no comparison gets the four reading entries and
+  // nothing that pretends to compare — the menu is built from what it is
+  // given, not from what it could do.
+  const plain = mount('ContextMenu', { menu: { x: 100, y: 100, commit: commit('abc') }, markers: [], onClose() {}, onOpenCommit() {}, onFlash() {} })
+  const plainLabels = nodes(plain.tree).filter(n => n.props.role === 'menuitem').map(n => n.children.join(''))
+  assert.equal(plainLabels.length, 4)
+  assert.ok(plainLabels.includes('Open commit details'))
+  assert.ok(plainLabels.every(label => !/compar/i.test(label)))
+  plain.unmount()
+
+  // The graph does wire it, so one commit can be marked…
+  const marked = []
+  const single = mount('ContextMenu', {
+    menu: { x: 1, y: 1, commit: commit('abc') },
+    markers: [], onCompare: picked => marked.push(picked.hash), onClose() {}, onOpenCommit() {}, onFlash() {},
+  })
+  const entries = nodes(single.tree).filter(n => n.props.role === 'menuitem')
+  const mark = entries.find(n => n.children.join('') === 'Mark for comparison')
+  assert.ok(mark, 'a commit must be markable')
+  mark.props.onClick()
+  assert.deepEqual(marked, ['abc'])
+  single.unmount()
+
+  // …a marked commit is offered as the base rather than marked twice…
+  const base = mount('ContextMenu', {
+    menu: { x: 1, y: 1, commit: commit('abc') },
+    markers: ['abc'], onCompare() {}, onClose() {}, onOpenCommit() {}, onFlash() {},
+  })
+  const baseLabels = nodes(base.tree).filter(n => n.props.role === 'menuitem').map(n => n.children.join(''))
+  assert.ok(baseLabels.includes('Use as comparison base'))
+  assert.ok(!baseLabels.includes('Compare the two marked commits'), 'one mark is not a comparison yet')
+  base.unmount()
+
+  // …and two marks are, which is the entry that opens the comparison.
+  let compared = 0
+  const pair = mount('ContextMenu', {
+    menu: { x: 1, y: 1, commit: commit('def') },
+    markers: ['abc', 'def'], onCompare() {}, onCompareSelected: () => { compared++ }, onClose() {}, onOpenCommit() {}, onFlash() {},
+  })
+  const pairEntries = nodes(pair.tree).filter(n => n.props.role === 'menuitem')
+  const open = pairEntries.find(n => n.children.join('') === 'Compare the two marked commits')
+  assert.ok(open, 'two marks must be comparable')
+  open.props.onClick()
+  assert.equal(compared, 1)
+  pair.unmount()
 })
 
 test('a commit list that would draw the same graph is recognised as unchanged', () => {
@@ -847,5 +888,74 @@ test('a stash badge offers apply, pop, branch and drop, each naming its position
   assert.ok(dialog, 'popping opens the confirmation dialog')
   assert.equal(dialog.props.request.action, 'stash.pop')
   assert.deepEqual(JSON.parse(JSON.stringify(dialog.props.request.params)), { index: 1 })
+  ui.unmount()
+})
+
+test('marking two commits opens a comparison of exactly those two revisions', async () => {
+  const opened = []
+  const signal = new AbortController().signal
+  const tabInfo = {
+    tab: {
+      signal,
+      visible: false,
+      actions: { openTab: (kind, options) => opened.push({ kind, params: options?.params }) },
+    },
+  }
+  const ui = mount('GraphView', { sessionId: 'one', tabInfo }, request => {
+    const other = aside(request)
+    if (other !== null) return other
+    return Promise.resolve(page(['a', 'b']))
+  })
+  await ui.settle()
+  assert.equal(find(ui.tree, node => node.props.className === 'gg-compare-bar'), undefined,
+    'nothing is being compared until something is marked')
+
+  const rowFor = hash => nodes(ui.tree).find(node => node.type?.name === 'CommitRow' && node.props.row.commit.hash === hash)
+  rowFor('a').props.onCompare(commit('a'))
+  ui.render()
+  const bar = find(ui.tree, node => node.props.className === 'gg-compare-bar')
+  assert.ok(bar, 'marking a commit shows what is being compared')
+  assert.match(textOf(bar), /Marked a/)
+
+  rowFor('b').props.onCompare(commit('b'))
+  ui.render()
+  const buttons = nodes(find(ui.tree, node => node.props.className === 'gg-compare-bar'))
+    .filter(node => node.type === 'button')
+  assert.deepEqual(buttons.map(node => node.children.join('')), ['Compare', 'Clear'])
+  buttons[0].props.onClick()
+  // Through JSON: the parameters were built inside the evaluated module.
+  assert.deepEqual(JSON.parse(JSON.stringify(opened)), [{ kind: 'git-compare', params: { base: 'a', head: 'b' } }])
+
+  // Clearing the marking takes the bar away again.
+  buttons[1].props.onClick()
+  ui.render()
+  assert.equal(find(ui.tree, node => node.props.className === 'gg-compare-bar'), undefined)
+  ui.unmount()
+})
+
+test('one mark can be compared with the working tree when there is work in it', async () => {
+  const opened = []
+  const tabInfo = {
+    tab: {
+      signal: new AbortController().signal,
+      visible: false,
+      actions: { openTab: (kind, options) => opened.push({ kind, params: options?.params }) },
+    },
+  }
+  const ui = mount('GraphView', { sessionId: 'one', tabInfo }, request => {
+    if (request.op === 'working') return Promise.resolve({ staged: [], unstaged: [{ path: 'a.txt', status: 'M' }], untracked: [] })
+    if (request.op === 'state') return Promise.resolve({ state: { ...idleState, dirty: true, changedCount: 1 } })
+    return Promise.resolve(page(['a']))
+  })
+  await ui.settle()
+  nodes(ui.tree).find(node => node.type?.name === 'CommitRow').props.onCompare(commit('a'))
+  ui.render()
+
+  const buttons = nodes(find(ui.tree, node => node.props.className === 'gg-compare-bar')).filter(node => node.type === 'button')
+  const workingTree = buttons.find(node => node.children.join('') === 'Compare with the working tree')
+  assert.ok(workingTree, 'a dirty tree is worth comparing against')
+  workingTree.props.onClick()
+  // An empty later side is the working tree; the view sends it as such.
+  assert.deepEqual(JSON.parse(JSON.stringify(opened)), [{ kind: 'git-compare', params: { base: 'a', head: '' } }])
   ui.unmount()
 })

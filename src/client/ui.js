@@ -308,6 +308,24 @@ export function copyText(text) {
 }
 
 /**
+ * Format a comparison's two sides.
+ *
+ * An empty later side means the working tree, which is the comparison a reader
+ * makes against an agent's uncommitted work — saying so beats an arrow pointing
+ * at nothing.
+ *
+ * @param base - the earlier revision.
+ * @param head - the later revision, or an empty value for the working tree.
+ * @returns the range, short enough for a summary line.
+ */
+export function formatRange(base, head) {
+  const short = value => String(value ?? '').slice(0, 8)
+  return head === '' || head === null || head === undefined
+    ? `${short(base)} → working tree`
+    : `${short(base)} → ${short(head)}`
+}
+
+/**
  * Format an ISO date for a reader.
  *
  * @param iso - the ISO-8601 string git produced.

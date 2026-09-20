@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { DIFF_KIND } from './constants.js'
+import { COMPARE_KIND, DIFF_KIND } from './constants.js'
 import { DiffPanel } from './diff-view.js'
 import { SplitPane, useRevealSelection } from './ui.js'
 import { diffFileIdentity } from './diff-layout.js'
@@ -11,6 +11,24 @@ export function openDiffTab(tabInfo, params) {
   const openTab = tabInfo?.tab?.actions?.openTab
   if (typeof openTab !== 'function') return false
   tabInfo.tab.actions.openTab(DIFF_KIND, { params })
+  return true
+}
+
+/**
+ * Open the comparison of two revisions in its own tab.
+ *
+ * An empty `head` is the working tree, which is how the same view answers
+ * "what has this agent changed since that commit".
+ *
+ * @param tabInfo - the graph tab's live information, which owns opening tabs.
+ * @param base - the earlier revision.
+ * @param head - the later revision, or nothing for the working tree.
+ * @returns whether a tab was opened.
+ */
+export function openCompareTab(tabInfo, base, head) {
+  const openTab = tabInfo?.tab?.actions?.openTab
+  if (typeof openTab !== 'function') return false
+  tabInfo.tab.actions.openTab(COMPARE_KIND, { params: { base, head: head ?? '' } })
   return true
 }
 
