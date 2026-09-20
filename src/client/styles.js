@@ -311,6 +311,17 @@ export const CSS = `
 .gg-commit-extra .gg-link { margin: 4px 6px 0 0; }
 @container (max-width: 350px) { .gg-readonly { display: none; } }
 
+/* The find box and the branch filter sit in their own row, so the column
+   heading above them keeps its grid. */
+.gg-filter-bar { display: flex; flex: none; align-items: center; gap: 6px; padding: 4px 8px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1); }
+.gg-branch-filter { width: 170px; flex: none; }
+.gg-find { flex: 1 1 auto; min-width: 0; box-sizing: border-box; height: 24px; padding: 0 7px;
+  color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-2);
+  border: 1px solid var(--dsw-alias-border-l1); border-radius: 4px; font: 12px/22px inherit; }
+.gg-find:focus-visible { outline: 1px solid var(--dsw-alias-brand-primary); outline-offset: -1px; }
+.gg-find-count { flex: none; color: var(--dsw-alias-label-secondary); font-size: 11px; white-space: nowrap; }
+
 /* A writing action is longer than the four read entries the menu used to hold,
    so it scrolls rather than running off the bottom of a short sidebar. */
 .gg-menu { max-height: min(72vh, 560px); overflow: auto; }

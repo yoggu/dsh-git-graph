@@ -128,6 +128,33 @@ export function groupRefs(refs, remotes, options = {}) {
 }
 
 /**
+ * Whether one commit answers a find query.
+ *
+ * The search runs over what is loaded rather than over the whole history: it is
+ * instant, it needs no round trip, and it cannot promise a row the graph is not
+ * showing anyway. Every term must match something, so `anna parser` narrows
+ * instead of widening — and the ref labels a reader can see are searchable too,
+ * because "which commit is on that branch" is the same question.
+ *
+ * @param commit - the row's commit.
+ * @param remotes - the configured remote names, for reading ref labels.
+ * @param query - what the reader typed.
+ * @returns whether the commit matches.
+ */
+export function matchesFilter(commit, remotes, query) {
+  const text = String(query ?? '').trim().toLocaleLowerCase()
+  if (text === '') return true
+  const haystack = [
+    commit.hash,
+    commit.subject,
+    commit.authorName,
+    commit.authorEmail,
+    ...(commit.refs ?? []).map(ref => parseRef(ref, remotes).label),
+  ].join('\n').toLocaleLowerCase()
+  return text.split(/\s+/).every(term => haystack.includes(term))
+}
+
+/**
  * Render the per-commit badges a graph row wears.
  *
  * A badge that absorbed its remote-tracking branches shows each remote's name

@@ -5,10 +5,10 @@ import { ACCORDION_H, ACCORDION_MAX_H, ACCORDION_MIN_H, ACCORDION_SPLIT, LANE_W,
 import { ActionDialog, operationLabel } from './dialog.js'
 import { openCompareTab } from './files.js'
 import { layout } from './graph-layout.js'
-import { CommitRow, GraphCanvas } from './graph-ui.js'
+import { CommitRow, GraphCanvas, matchesFilter } from './graph-ui.js'
 import { accordionLayoutBySession, CommitAccordion, openAccordionBySession, WorkingAccordion } from './accordions.js'
 import { useRepositoryWatch } from './live.js'
-import { ContextMenu, formatTime, GitIcon } from './ui.js'
+import { CompactDropdown, ContextMenu, formatTime, GitIcon } from './ui.js'
 
 const h = React.createElement
 
@@ -110,6 +110,11 @@ export function GraphView({ tabInfo, sessionId }) {
   const [fetching, setFetching] = React.useState(false)
   const [readAt, setReadAt] = React.useState(null)
   const [revision, setRevision] = React.useState(0)
+  // Which branch's history is shown, and what is being searched for. The first
+  // is a host-side filter — the history is read narrowed — while the second
+  // runs over what was loaded.
+  const [refFilter, setRefFilter] = React.useState('')
+  const [query, setQuery] = React.useState('')
   const [menu, setMenu] = React.useState(null)
   // The action the reader picked, waiting in the confirmation dialog. Nothing
   // has run while this is set.
@@ -156,14 +161,21 @@ export function GraphView({ tabInfo, sessionId }) {
    * @param options.report - whether a failure is worth showing. A push-driven refresh stays silent.
    * @param options.announce - whether an unchanged result is still worth a word, which only a
    *   refresh the reader asked for is.
+   * @param options.ref - the branch whose history to read; defaults to the current filter.
    */
-  const load = React.useCallback(async (append = false, { background = false, report = !background, announce = false } = {}) => {
+  const load = React.useCallback(async (append = false, { background = false, report = !background, announce = false, ref = refFilter } = {}) => {
     const id = ++request.current
     if (background) setChecking(true)
     else { setBusy(true); setError(null) }
     try {
       const targetCount = append ? 120 : Math.max(120, Math.min(600, Math.max(state.commits.length, restoreCount.current)))
-      const result = await call({ op: 'commits', sessionId, skip: append ? state.nextSkip : 0, limit: targetCount }, signal)
+      const result = await call({
+        op: 'commits',
+        sessionId,
+        skip: append ? state.nextSkip : 0,
+        limit: targetCount,
+        ...(ref === '' ? {} : { ref }),
+      }, signal)
       if (request.current !== id || signal.aborted) return
       const previous = shown.current.commits
       const loadedCount = append ? state.commits.length + result.commits.length : result.commits.length
@@ -195,7 +207,7 @@ export function GraphView({ tabInfo, sessionId }) {
     // supersede a read that set `busy`, and a guard that only cleared the flag
     // it set itself would leave the spinner on forever.
     finally { if (request.current === id) { setChecking(false); setBusy(false) } }
-  }, [sessionId, signal, state.nextSkip, state.commits.length])
+  }, [sessionId, signal, state.nextSkip, state.commits.length, refFilter])
   const refresh = React.useCallback(() => {
     load(false, { background: true, report: true, announce: true })
     loadWorking()
@@ -249,8 +261,16 @@ export function GraphView({ tabInfo, sessionId }) {
     onDegraded: React.useCallback(message => flash(`Live updates unavailable — ${message}`), []),
   })
   const workingCount = React.useMemo(() => new Set(working.files.map(file => file.path)).size, [working.files])
+  const remotes = state.refs?.remotes ?? []
+  // The find query narrows what is drawn, never what is loaded: the page the
+  // host sent stays whole, so clearing the query brings every row back without
+  // another read.
+  const matched = React.useMemo(
+    () => state.commits.filter(commit => matchesFilter(commit, remotes, query)),
+    [state.commits, remotes, query],
+  )
   const synthetic = React.useMemo(() => ({ hash: 'WORKTREE', parents: [], authorName: '', authorDate: '', refs: [], subject: `Uncommitted changes (${workingCount})`, synthetic: true, count: workingCount }), [workingCount])
-  const commits = React.useMemo(() => workingCount > 0 ? [synthetic, ...state.commits] : state.commits, [workingCount, synthetic, state.commits])
+  const commits = React.useMemo(() => workingCount > 0 ? [synthetic, ...matched] : matched, [workingCount, synthetic, matched])
   const graph = React.useMemo(() => layout(commits, !state.exhausted), [commits, state.exhausted])
   const selectedIndex = commits.findIndex(commit => commit.hash === selected)
   const expanded = selectedIndex >= 0
@@ -312,6 +332,48 @@ export function GraphView({ tabInfo, sessionId }) {
       ? h('div', { className: 'gg-op-banner', role: 'status' },
         h('span', { className: 'gg-op-text' }, 'Another Git process is writing to this repository (index.lock). Writes are refused until it finishes.'))
       : null
+  // The branch filter and the find box. One narrows the history the host reads,
+  // the other narrows the rows already here; the count says which is in effect.
+  const refOptions = React.useMemo(() => {
+    const refs = state.refs?.refs ?? []
+    const short = prefix => refs.filter(ref => ref.kind === prefix)
+    return [
+      { value: '', label: 'All branches' },
+      { value: 'HEAD', label: 'Current branch only' },
+      ...short('branch')
+        .map(ref => ({ value: ref.name, label: ref.name.replace(/^refs\/heads\//, '') }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+      ...short('tag')
+        .map(ref => ({ value: ref.name, label: `tag: ${ref.name.replace(/^refs\/tags\//, '')}` }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    ]
+  }, [state.refs])
+  const changeRefFilter = value => {
+    setRefFilter(value)
+    load(false, { background: true, report: true, ref: value })
+  }
+  const searching = query.trim() !== ''
+  const filterBar = h('div', { className: 'gg-filter-bar' },
+    h(CompactDropdown, {
+      value: refFilter,
+      options: refOptions,
+      onChange: changeRefFilter,
+      label: 'Branch filter',
+      title: 'Show the history of one branch or tag',
+      className: 'gg-branch-filter',
+    }),
+    h('input', {
+      type: 'search',
+      className: 'gg-find',
+      value: query,
+      placeholder: 'Find commits…',
+      'aria-label': 'Find commits',
+      onChange: event => setQuery(event.target.value),
+    }),
+    searching
+      ? h('span', { className: 'gg-find-count', role: 'status' },
+        `${matched.length} of ${state.commits.length} loaded commit${state.commits.length === 1 ? '' : 's'}`)
+      : null)
   // The comparison a reader is assembling, with the two ways out of it: two
   // marks compare against each other, one mark compares against the working
   // tree — the question an agent's uncommitted work raises.
@@ -350,6 +412,7 @@ export function GraphView({ tabInfo, sessionId }) {
           }, fetching ? h('span', { className: 'gg-spinner', 'aria-hidden': 'true' }) : h(GitIcon, { name: 'download', size: 13 })) : null,
           ),
         h('span', null, 'Description'), h('span', null, 'Date'), h('span', null, 'Author'), h('span', null, 'Commit')),
+      filterBar,
       banner,
       compareBar,
       error ? h('div', { className: 'gg-error', role: 'alert' }, error) : null,
@@ -364,6 +427,11 @@ export function GraphView({ tabInfo, sessionId }) {
       } }, h('div', { className: 'gg-graph-inner', style: { height: totalHeight } }, h(GraphCanvas, { ...graph, height: totalHeight, expandedRow: expanded ? selectedIndex : -1, expandedHeight: expanded ? accordionHeight : 0 }), h('div', { className: 'gg-rows' }, rows)),
       busy ? h('div', { className: 'gg-history-status', role: 'status' }, h('span', { className: 'gg-spinner', 'aria-hidden': 'true' }), h('span', null, state.commits.length ? 'Loading older history…' : 'Loading history…')) : null,
       !busy && !error && !state.commits.length ? h('div', { className: 'gg-empty' }, 'No commits yet. Review uncommitted files above.') : null,
+      // The find box searches what is loaded, so a filtered-out graph is not the
+      // same as an empty history and must not read like one.
+      !busy && !error && state.commits.length > 0 && matched.length === 0
+        ? h('div', { className: 'gg-empty' }, 'No loaded commit matches the search. Older history may still hold one — load more, or clear it.')
+        : null,
       state.commits.length > 0 && !busy && !state.exhausted ? h('button', { className: 'gg-more-btn', onClick: () => load(true) }, 'Load older commits') : null),
     menu ? h(ContextMenu, {
       menu,

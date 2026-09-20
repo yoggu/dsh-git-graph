@@ -418,3 +418,62 @@ test('the compare and diff operations accept a working-tree side through dispatc
     cleanup()
   }
 })
+
+test('a history filter is accepted only for a ref this repository has', async () => {
+  const { root, cleanup } = fixture()
+  try {
+    git(root, 'branch', 'topic')
+    git(root, 'tag', 'v1')
+    const refs = await internals.listRefs(root)
+    assert.equal(internals.acceptFilterRef('refs/heads/topic', refs), 'refs/heads/topic')
+    assert.equal(internals.acceptFilterRef('refs/tags/v1', refs), 'refs/tags/v1')
+    assert.equal(internals.acceptFilterRef('HEAD', refs), 'HEAD')
+    // A name that is not a ref of this repository never reaches git, so an
+    // option cannot be smuggled into the argument position the filter occupies.
+    assert.throws(() => internals.acceptFilterRef('--all', refs), /refusing ref/)
+    assert.throws(() => internals.acceptFilterRef('refs/heads/absent', refs), /refusing ref/)
+    assert.throws(() => internals.acceptFilterRef('--output=/tmp/x', refs), /refusing ref/)
+    assert.throws(() => internals.acceptFilterRef('HEAD~3', refs), /refusing ref/)
+
+    // Filtering really narrows the history to the named ref.
+    git(root, 'checkout', '-q', '-b', 'side')
+    writeFileSync(join(root, 'side.txt'), 's\n')
+    git(root, 'add', '.')
+    git(root, 'commit', '-qm', 'Side only')
+    const all = await internals.listCommits(root, { limit: 20, skip: 0 })
+    const only = await internals.listCommits(root, { limit: 20, skip: 0, ref: 'refs/heads/main' })
+    assert.ok(all.length > only.length)
+    assert.ok(!only.some(commit => commit.subject === 'Side only'))
+  } finally {
+    cleanup()
+  }
+})
+
+test('the commits operation reports and applies the filter through dispatch', async () => {
+  const { root, cleanup } = fixture()
+  try {
+    const ctx = {
+      get: name => (name === 'sessions'
+        ? { get: id => (id === 'session' ? { header: { cwd: root } } : undefined) }
+        : undefined),
+    }
+    git(root, 'branch', 'topic')
+    const filtered = await internals.dispatch(ctx, {
+      op: 'commits', sessionId: 'session', limit: 20, ref: 'refs/heads/topic',
+    })
+    assert.equal(filtered.ref, 'refs/heads/topic')
+    assert.ok(filtered.commits.length > 0)
+    assert.deepEqual(filtered.refs.refs.map(entry => entry.name).sort(),
+      ['refs/heads/main', 'refs/heads/topic'])
+
+    const unfiltered = await internals.dispatch(ctx, { op: 'commits', sessionId: 'session', limit: 20 })
+    assert.equal(unfiltered.ref, null)
+
+    await assert.rejects(
+      () => internals.dispatch(ctx, { op: 'commits', sessionId: 'session', limit: 20, ref: '--all' }),
+      /refusing ref/,
+    )
+  } finally {
+    cleanup()
+  }
+})

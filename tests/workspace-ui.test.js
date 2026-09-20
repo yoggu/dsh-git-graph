@@ -4,6 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import * as GitSyntax from '../src/client/syntax.js'
 import { commitActions, describeBadge, initialValues, missingFields, paramsFor, refActions } from '../src/client/actions.js'
+import { matchesFilter } from '../src/client/graph-ui.js'
 import { diffFileIdentity, parseUnifiedPatch, planSplitRows, resolveDiffLayout } from '../src/client/diff-layout.js'
 
 // Execute the modular source with a minimal hook runner. Pure helpers are
@@ -957,5 +958,99 @@ test('one mark can be compared with the working tree when there is work in it', 
   workingTree.props.onClick()
   // An empty later side is the working tree; the view sends it as such.
   assert.deepEqual(JSON.parse(JSON.stringify(opened)), [{ kind: 'git-compare', params: { base: 'a', head: '' } }])
+  ui.unmount()
+})
+
+test('a find query matches what a row actually shows', () => {
+  const remotes = ['origin']
+  const entry = {
+    hash: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
+    subject: 'Fix the parser for nested lists',
+    authorName: 'Anna Beispiel',
+    authorEmail: 'anna@example.invalid',
+    refs: ['HEAD -> main', 'origin/main', 'tag: v1.2.0'],
+  }
+  assert.ok(matchesFilter(entry, remotes, ''), 'an empty query matches everything')
+  assert.ok(matchesFilter(entry, remotes, '   '))
+  assert.ok(matchesFilter(entry, remotes, 'parser'))
+  assert.ok(matchesFilter(entry, remotes, 'ANNA'), 'the search is case-insensitive')
+  assert.ok(matchesFilter(entry, remotes, 'a1b2c3'), 'a hash prefix is searchable')
+  assert.ok(matchesFilter(entry, remotes, 'anna parser'), 'every term must match')
+  assert.ok(!matchesFilter(entry, remotes, 'anna release'), 'a term that matches nothing excludes the row')
+  // The labels a reader can see are searchable too.
+  assert.ok(matchesFilter(entry, remotes, 'main'))
+  assert.ok(matchesFilter(entry, remotes, 'v1.2.0'))
+  assert.ok(!matchesFilter(entry, remotes, 'origin/release'))
+})
+
+test('the find box narrows the drawn rows without dropping what was loaded', async () => {
+  const ui = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo() }, request => {
+    const other = aside(request)
+    if (other !== null) return other
+    return Promise.resolve(page(['a', 'b', 'c']))
+  })
+  await ui.settle()
+  const drawn = () => nodes(ui.tree).filter(node => node.type?.name === 'CommitRow').map(node => node.props.row.commit.hash)
+  assert.deepEqual(drawn(), ['a', 'b', 'c'])
+
+  find(ui.tree, node => node.props.className === 'gg-find').props.onChange({ target: { value: 'b' } })
+  ui.render()
+  assert.deepEqual(drawn(), ['b'])
+  assert.match(textOf(find(ui.tree, node => node.props.className === 'gg-find-count')), /1 of 3 loaded commits/)
+
+  // A search that matches nothing says so rather than looking like an empty
+  // history, and the rows come back from the page already held.
+  find(ui.tree, node => node.props.className === 'gg-find').props.onChange({ target: { value: 'zzz' } })
+  ui.render()
+  assert.deepEqual(drawn(), [])
+  assert.match(textOf(find(ui.tree, node => node.props.className === 'gg-empty')), /No loaded commit matches/)
+
+  find(ui.tree, node => node.props.className === 'gg-find').props.onChange({ target: { value: '' } })
+  ui.render()
+  assert.deepEqual(drawn(), ['a', 'b', 'c'])
+  assert.equal(find(ui.tree, node => node.props.className === 'gg-find-count'), undefined)
+  ui.unmount()
+})
+
+test('choosing a branch filter reads that branch’s history instead of every ref', async () => {
+  const reads = []
+  const ui = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo() }, request => {
+    if (request.op === 'working') return Promise.resolve({ staged: [], unstaged: [], untracked: [] })
+    if (request.op === 'state') return Promise.resolve({ state: idleState })
+    reads.push(request)
+    return Promise.resolve({
+      ...page(['a']),
+      refs: {
+        refs: [
+          { name: 'refs/heads/main', target: 'a'.repeat(40), kind: 'branch', isHead: true },
+          { name: 'refs/heads/topic', target: 'b'.repeat(40), kind: 'branch', isHead: false },
+          { name: 'refs/tags/v1', target: 'c'.repeat(40), kind: 'tag', isHead: false },
+        ],
+        remotes: [],
+        head: 'main',
+      },
+    })
+  })
+  await ui.settle()
+  assert.equal(reads.length, 1)
+  assert.equal(reads[0].ref, undefined, 'the graph starts on every ref')
+
+  const filter = find(ui.tree, node => node.props.className === 'gg-branch-filter')
+  assert.ok(filter, 'the filter bar carries the branch chooser')
+  assert.deepEqual([...filter.props.options].map(option => option.value),
+    ['', 'HEAD', 'refs/heads/main', 'refs/heads/topic', 'refs/tags/v1'])
+
+  filter.props.onChange('refs/heads/topic')
+  await ui.settle()
+  assert.equal(reads.length, 2)
+  assert.equal(reads[1].ref, 'refs/heads/topic', 'the narrowing is the host’s, not a client-side hide')
+  assert.equal(reads[1].skip, 0, 'a new filter starts at the top of that history')
+
+  // Back to every ref: the filter is dropped from the request rather than sent
+  // as an empty string.
+  find(ui.tree, node => node.props.className === 'gg-branch-filter').props.onChange('')
+  await ui.settle()
+  assert.equal(reads.length, 3)
+  assert.equal(reads[2].ref, undefined)
   ui.unmount()
 })
