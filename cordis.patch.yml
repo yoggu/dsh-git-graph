@@ -1,13 +1,15 @@
 # dsh-git-graph bundle layer.
 #
 # One host row. It resolves the repository of the calling Session's workspace,
-# runs `git` read-only against it, and serves the answers on this package's own
-# exact HTTP route. The browser half owns the rendering; it never runs git.
+# answers Git questions about it, and carries out the writing actions a reader
+# confirms — all on this package's own exact HTTP route. The browser half owns
+# the rendering and the confirmation dialog; it never runs git and never builds
+# a command line, it names an action and the host decides what that runs.
 #
-# Nothing here writes to a repository: no checkout, no commit, no fetch. The
-# working-tree answer is a read of what a running agent left behind, which is
-# the point — `git status` and `git diff` against HEAD describe the tree as it
-# is at the moment of the request, never a cached snapshot of it.
+# The row registers no service and holds no per-session state beyond its
+# repository watchers, so it belongs to the host plane: one instance serves
+# every session, and each request resolves its own workspace from the Session id
+# it carries.
 - insert:
     - id: git-graph
       name: 'dsh-git-graph'

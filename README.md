@@ -1,8 +1,10 @@
 # dsh-git-graph
 
-Git views in the right Sidebar of DSH Web: the commit history of this session's
+Git in the right Sidebar of DSH Web: the commit history of this session's
 workspace as a lane graph, one commit's details and files, the diff of any file
-(historical or uncommitted), and the working tree an agent has left behind.
+(historical or uncommitted), the working tree an agent has left behind, and the
+writing actions a reader confirms — branches, tags, commits, stashes, the working
+tree and the remote.
 
 ## Graph, accordion, and diff tabs
 
@@ -33,9 +35,10 @@ outside that sidebar.
   keeps your scroll position, your open accordion and the loaded depth, and only
   re-renders when something the rows draw actually changed.
 - **Fetch** pulls every configured remote (`git fetch --all`, tags included). It
-  is the one button that touches the network, it appears only when a remote
-  exists, and it updates remote-tracking branches only — the working tree, the
-  index, HEAD and your local branches are untouched.
+  is the one toolbar button that touches the network, it appears only when a
+  remote exists, and it updates remote-tracking branches only — the working tree,
+  the index, HEAD and your local branches are untouched. Push and pull live in a
+  branch's own menu, where they are confirmed like every other writing action.
 
 The diff tab defaults to **Auto** layout: it uses Combined view below 900px and
 Split view at or above 900px. **Split** and **Combined** are explicit overrides.
@@ -75,15 +78,40 @@ plus [Sublime Merge](https://www.sublimemerge.com/docs/getting_started#understan
 [GitKraken](https://help.gitkraken.com/gitkraken-desktop/interface/), and
 [GitHub Desktop](https://docs.github.com/en/desktop/making-changes-in-a-branch/viewing-the-branch-history-in-github-desktop).
 
-## What it never does
+## What it does to your repository
 
-It never touches your work. There is no checkout, no commit, no reset, no merge,
-no push: every argument list is built host-side, and the browser chooses from
-named operations rather than sending command text. The one writing action is
-**Fetch**, which changes only what this repository knows about the remote
-(`refs/remotes/*`) and leaves the working tree, the index, HEAD and every local
-branch exactly as they were. The right-click menu copies hashes and subjects and
-opens views; it offers no mutating Git action.
+Reads change nothing. The writing actions are the ones a reader picks from a
+menu and confirms in a dialog — never raw command text: the browser names an
+action, the host validates every argument and builds the argument list, and the
+dialog shows that list before anything runs.
+
+Three rules keep an action from surprising the agent working in the same tree:
+
+- Nothing runs while a Git operation is half-finished (`MERGE_HEAD`,
+  `REBASE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`) or while
+  `.git/index.lock` exists. The way *out* of the operation that is running is
+  offered instead, as a banner above the graph.
+- Writes are queued per repository, so two clicks cannot race each other for the
+  index. Git's own locking still arbitrates with everyone else.
+- A dirty working tree is a warning, not a refusal: git decides which changes a
+  checkout may carry across, and the dialog says what the tree holds first.
+
+`--force-with-lease` is used instead of `--force`, and no action ever passes a
+name or a path that starts with `-` to git in an argument position.
+
+- **Branches** — check out, create (at HEAD, a commit or a ref), rename, delete
+  (`-D` only when asked), merge (`--no-ff` when asked), rebase, reset
+  (soft/mixed/hard), pull, push, and fetching a remote-tracking branch into the
+  local branch of the same name.
+- **Tags** — create a lightweight or annotated tag on any commit, delete one,
+  push one.
+- **Commits** — check out (detached), cherry-pick, revert, reset the branch to
+  it, and create a branch or a tag at it.
+- **Working tree** — stash (with a message, untracked files, or keeping the
+  index), discard one file's changes (from the index or from HEAD), reset
+  everything (mixed or hard), remove untracked files.
+- **Stashes** — apply, pop, drop, and start a branch from one.
+- **Remote** — fetch, with `--prune` when asked.
 
 ## How it is wired
 
@@ -92,7 +120,10 @@ opens views; it offers no mutating Git action.
   opened in a subdirectory still finds its repository) and serves two exact
   routes: `/api/dsh-git-graph` for requests, and `/api/dsh-git-graph/events`, a
   server-sent event stream of repository changes. A request that names no live
-  session is refused rather than answered from another project.
+  session is refused rather than answered from another project. Reads are
+  `commits`, `commit`, `diff`, `blob`, `working`, `workingDiff`, `workingFile`
+  and `state`; the writing path is `plan` (what would run, and whether it may)
+  and `action` (run it).
 - The watch behind that stream follows the Git directory alone — not the working
   tree. Measured on a mid-sized repository that is hundreds of directories
   instead of tens of thousands, and it carries every signal the graph draws:
@@ -103,7 +134,9 @@ opens views; it offers no mutating Git action.
 - `src/client/` — the modular browser source. It registers three tab types in the
   right Sidebar and renders the graph, details and patches. Its imports follow an
   acyclic entry → registration → views → helpers direction, with `live.js`
-  owning the push channel.
+  owning the push channel. `actions.js` holds the action vocabulary the menus are
+  built from and `dialog.js` the confirmation dialog that plans an action before
+  offering to run it.
 - `client.js` — the generated, self-contained DSH browser wrapper. It keeps React
   external and runs no git itself.
 

@@ -1,6 +1,8 @@
 import * as React from 'react'
+import { commitActions, describeBadge, operationActions, refActions, workingActions } from './actions.js'
 import { call } from './api.js'
 import { ACCORDION_H, ACCORDION_MAX_H, ACCORDION_MIN_H, ACCORDION_SPLIT, LANE_W, LANE_X0, ROW_H } from './constants.js'
+import { ActionDialog, operationLabel } from './dialog.js'
 import { layout } from './graph-layout.js'
 import { CommitRow, GraphCanvas } from './graph-ui.js'
 import { accordionLayoutBySession, CommitAccordion, openAccordionBySession, WorkingAccordion } from './accordions.js'
@@ -108,7 +110,11 @@ export function GraphView({ tabInfo, sessionId }) {
   const [readAt, setReadAt] = React.useState(null)
   const [revision, setRevision] = React.useState(0)
   const [menu, setMenu] = React.useState(null)
+  // The action the reader picked, waiting in the confirmation dialog. Nothing
+  // has run while this is set.
+  const [pending, setPending] = React.useState(null)
   const [notice, setNotice] = React.useState(null)
+  const [repo, setRepo] = React.useState(null)
   const request = React.useRef(0)
   const noticeTimer = React.useRef(null)
   const graphRef = React.useRef(null)
@@ -116,7 +122,24 @@ export function GraphView({ tabInfo, sessionId }) {
   // this ref is how a refresh compares against what is on screen.
   const shown = React.useRef(state)
   shown.current = state
-  const flash = text => { setNotice(text); clearTimeout(noticeTimer.current); noticeTimer.current = setTimeout(() => setNotice(null), 2600) }
+  // A notice is one line; the rest of git's account travels with it as the
+  // element's tooltip rather than being cut off with no way to see it.
+  const flash = (text, detail) => {
+    setNotice({ text, detail: detail ?? null })
+    clearTimeout(noticeTimer.current)
+    noticeTimer.current = setTimeout(() => setNotice(null), 2600)
+  }
+  /**
+   * Read what the repository is in the middle of.
+   *
+   * The action menus are built from this: a merge in progress offers its own
+   * way out instead of actions the host would refuse.
+   */
+  const loadState = React.useCallback(() => call({ op: 'state', sessionId }, signal)
+    // A host that answered without a state — an older build, or a route that
+    // failed — leaves the graph with no action menu rather than an exception.
+    .then(result => { const state = result?.state ?? null; setRepo(state); return state })
+    .catch(error => { if (error.name !== 'AbortError') setRepo(null); return null }), [sessionId, signal])
   const loadWorking = React.useCallback(() => call({ op: 'working', sessionId }, signal).then(result => {
     const files = ['staged', 'unstaged', 'untracked'].flatMap(group => (result[group] ?? []).map(entry => ({ ...entry, group, staged: group === 'staged' })))
     setWorking({ files, error: null }); setReadAt(new Date()); return files
@@ -172,8 +195,28 @@ export function GraphView({ tabInfo, sessionId }) {
   const refresh = React.useCallback(() => {
     load(false, { background: true, report: true, announce: true })
     loadWorking()
+    loadState()
     setRevision(value => value + 1)
-  }, [load, loadWorking])
+  }, [load, loadWorking, loadState])
+  /**
+   * Take stock after an action ran.
+   *
+   * git's own account is the notice: it says "Switched to branch 'main'" or
+   * lists what a merge brought in, which is more use than any sentence written
+   * here. The history, the working tree and the repository state are all
+   * re-read afterwards, because an action can change any of the three and the
+   * watch push that would normally report it arrives by a different route.
+   */
+  const afterAction = React.useCallback(result => {
+    setPending(null)
+    const output = String(result?.output ?? '').trim()
+    const [first, ...rest] = output.split('\n')
+    flash(output === '' ? `${result?.summary ?? 'Action'} — done` : first, rest.join('\n'))
+    load(false, { background: true, report: true })
+    loadWorking()
+    loadState()
+    setRevision(value => value + 1)
+  }, [flash, load, loadWorking, loadState])
   const fetchRemotes = React.useCallback(async () => {
     setFetching(true)
     try {
@@ -186,18 +229,19 @@ export function GraphView({ tabInfo, sessionId }) {
       }
       load(false, { background: true, report: true })
       loadWorking()
+      loadState()
       setRevision(value => value + 1)
     } catch (err) {
       if (err.name !== 'AbortError') setError(String(err.message ?? err))
     } finally { setFetching(false) }
-  }, [sessionId, signal, load, loadWorking])
-  React.useEffect(() => { load(); loadWorking(); return () => { request.current += 1; clearTimeout(noticeTimer.current) } }, [sessionId, signal])
+  }, [sessionId, signal, load, loadWorking, loadState])
+  React.useEffect(() => { load(); loadWorking(); loadState(); return () => { request.current += 1; clearTimeout(noticeTimer.current) } }, [sessionId, signal])
   // The push channel needs no indicator of its own: an arrival shows up as a
   // row, and an outage reports itself in words.
   useRepositoryWatch({
     sessionId,
     visible: tabInfo.tab.visible === true,
-    onChanged: React.useCallback(() => { load(false, { background: true }); loadWorking() }, [load, loadWorking]),
+    onChanged: React.useCallback(() => { load(false, { background: true }); loadWorking(); loadState() }, [load, loadWorking, loadState]),
     onDegraded: React.useCallback(message => flash(`Live updates unavailable — ${message}`), []),
   })
   const workingCount = React.useMemo(() => new Set(working.files.map(file => file.path)).size, [working.files])
@@ -210,13 +254,44 @@ export function GraphView({ tabInfo, sessionId }) {
   const laneWidth = Math.max(100, LANE_X0 * 2 + graph.columnCount * LANE_W)
   const rows = graph.rows.map((row, index) => h('div', { key: row.commit.hash, className: 'gg-row-stack' },
     h(CommitRow, { row, indent: laneWidth, dense: false, remotes: state.refs?.remotes ?? [], selected: selected === row.commit.hash,
-      onSelect: toggle, onCompare: toggle, onContextMenu: (event, commit) => setMenu({ x: event.clientX, y: event.clientY, commit }) }),
-    selected === row.commit.hash ? (row.commit.synthetic ? h(WorkingAccordion, { files: working.files, tabInfo, height: accordionHeight, split: accordionSplit, onHeightChange: setAccordionHeight, onSplitChange: setAccordionSplit }) : h(CommitAccordion, { hash: row.commit.hash, sessionId, signal, revision, tabInfo, onSelect: selectAccordion, height: accordionHeight, split: accordionSplit, onHeightChange: setAccordionHeight, onSplitChange: setAccordionSplit })) : null))
+      onSelect: toggle, onCompare: toggle,
+      onContextMenu: (event, commit) => setMenu({ x: event.clientX, y: event.clientY, commit }),
+      onRefContextMenu: (event, badge) => {
+        // A detached-HEAD badge names no ref, so it offers no ref actions and
+        // the row's own menu stays closed rather than opening an empty one.
+        const ref = describeBadge(badge, state.refs?.refs ?? [])
+        if (ref !== null) setMenu({ x: event.clientX, y: event.clientY, ref })
+      } }),
+    selected === row.commit.hash ? (row.commit.synthetic ? h(WorkingAccordion, { files: working.files, sessionId, signal, tabInfo, onChanged: loadWorking, height: accordionHeight, split: accordionSplit, onHeightChange: setAccordionHeight, onSplitChange: setAccordionSplit }) : h(CommitAccordion, { hash: row.commit.hash, sessionId, signal, revision, tabInfo, onSelect: selectAccordion, height: accordionHeight, split: accordionSplit, onHeightChange: setAccordionHeight, onSplitChange: setAccordionSplit })) : null))
   const totalHeight = graph.rows.length * ROW_H + (expanded ? accordionHeight : 0)
   const stamp = formatTime(readAt)
   const refreshTitle = `Refresh history and working changes${stamp === null ? '' : ` — last read ${stamp}`}`
+  // Which actions a menu offers depends on what was pressed: a commit, a ref
+  // badge, or the uncommitted row. A half-finished operation replaces all of
+  // them, because the host refuses everything else until it is resolved.
+  const menuActions = React.useMemo(() => {
+    if (menu === null) return []
+    const context = { branch: repo?.branch ?? null, remotes: state.refs?.remotes ?? [] }
+    if (menu.ref !== undefined) return refActions(menu.ref, context)
+    if (menu.commit === undefined) return []
+    if (menu.commit.synthetic === true) return workingActions()
+    return commitActions(menu.commit, context)
+  }, [menu, repo, state.refs])
+  const banner = repo === null ? null : repo.operation !== null
+    ? h('div', { className: 'gg-op-banner', role: 'status' },
+      h('span', { className: 'gg-op-text' },
+        `A ${operationLabel(repo.operation)} is in progress`
+        + (repo.conflicts.length === 0 ? '' : ` — ${repo.conflicts.length} conflicted file${repo.conflicts.length === 1 ? '' : 's'}`)
+        + '. Other actions are refused until it is finished.'),
+      operationActions(repo).map(entry => h('button', {
+        key: entry.action, type: 'button', className: 'gg-btn', onClick: () => setPending(entry),
+      }, entry.label)))
+    : repo.locked
+      ? h('div', { className: 'gg-op-banner', role: 'status' },
+        h('span', { className: 'gg-op-text' }, 'Another Git process is writing to this repository (index.lock). Writes are refused until it finishes.'))
+      : null
   return h('div', { className: 'gg-root gg-workbench' },
-    notice ? h('div', { className: 'gg-notice', role: 'status' }, notice) : null,
+    notice ? h('div', { className: 'gg-notice', role: 'status', title: notice.detail ?? undefined }, notice.text) : null,
     h('section', { className: 'gg-root gg-history', style: { '--gg-lane-width': `${laneWidth}px` }, 'aria-label': 'Commit history' },
       h('div', { className: 'gg-section-heading gg-column-heading' },
         h('span', { className: 'gg-column-actions' },
@@ -239,6 +314,7 @@ export function GraphView({ tabInfo, sessionId }) {
           }, fetching ? h('span', { className: 'gg-spinner', 'aria-hidden': 'true' }) : h(GitIcon, { name: 'download', size: 13 })) : null,
           ),
         h('span', null, 'Description'), h('span', null, 'Date'), h('span', null, 'Author'), h('span', null, 'Commit')),
+      banner,
       error ? h('div', { className: 'gg-error', role: 'alert' }, error) : null,
       // A working-tree read can fail on its own — a repository whose history is
       // readable but whose working tree is not. Saying so keeps an empty file
@@ -252,6 +328,21 @@ export function GraphView({ tabInfo, sessionId }) {
       busy ? h('div', { className: 'gg-history-status', role: 'status' }, h('span', { className: 'gg-spinner', 'aria-hidden': 'true' }), h('span', null, state.commits.length ? 'Loading older history…' : 'Loading history…')) : null,
       !busy && !error && !state.commits.length ? h('div', { className: 'gg-empty' }, 'No commits yet. Review uncommitted files above.') : null,
       state.commits.length > 0 && !busy && !state.exhausted ? h('button', { className: 'gg-more-btn', onClick: () => load(true) }, 'Load older commits') : null),
-    menu ? h(ContextMenu, { menu, markers: [], onClose: () => setMenu(null), onOpenCommit: toggle, onFlash: flash }) : null))
+    menu ? h(ContextMenu, {
+      menu,
+      actions: menuActions,
+      onAction: setPending,
+      markers: [],
+      onClose: () => setMenu(null),
+      onOpenCommit: toggle,
+      onFlash: flash,
+    }) : null,
+    pending === null ? null : h(ActionDialog, {
+      request: pending,
+      sessionId,
+      signal,
+      onClose: () => setPending(null),
+      onDone: afterAction,
+    })))
 }
 

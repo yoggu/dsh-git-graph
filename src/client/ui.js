@@ -147,16 +147,19 @@ export function GuideGlyph({ size }) {
 }
 
 /**
- * The right-click menu for a commit.
+ * The right-click menu for a commit or a ref.
  *
- * Everything here is a read: copy a hash, open a commit, compare two. The
- * write actions a full Git client offers — checkout, merge, rebase, reset —
- * are deliberately absent, because this plugin never modifies a repository.
+ * The menu carries two kinds of entry, and the split is deliberate. The
+ * writing entries arrive from the caller as action requests — they name an
+ * action and are confirmed in a dialog that shows the argument list the host
+ * would run — while the reading entries below them are built here: copying a
+ * hash or a ref name, opening a commit, comparing two. Nothing in this file
+ * runs git or decides what an action's command will be.
  *
- * @param props - the menu's position and commit, and the actions it offers.
- * @returns the menu element, or null before a commit is chosen.
+ * @param props - the menu's position, its subject, and the actions it offers.
+ * @returns the menu element, or null before a subject is chosen.
  */
-export function ContextMenu({ menu, markers, onClose, onOpenCommit, onCompare, onCompareSelected, onFlash }) {
+export function ContextMenu({ menu, actions = [], onAction, markers, onClose, onOpenCommit, onCompare, onCompareSelected, onFlash }) {
   const ref = React.useRef(null)
 
   // A menu that outlives the press that dismissed it would sit over the
@@ -191,48 +194,67 @@ export function ContextMenu({ menu, markers, onClose, onOpenCommit, onCompare, o
   }, [onClose])
 
   const commit = menu.commit
-  const items = [
-    {
-      label: 'Copy commit hash',
-      run: () => { copyText(commit.hash); onFlash('Hash copied') },
-    },
-    {
-      label: 'Copy short hash',
-      run: () => { copyText(commit.hash.slice(0, 8)); onFlash('Short hash copied') },
-    },
-    {
-      label: 'Copy subject',
-      run: () => { copyText(commit.subject); onFlash('Subject copied') },
-    },
-    {
-      label: 'Open commit details',
-      run: () => onOpenCommit(commit),
-    },
-  ]
-  if (onCompare && markers.includes(commit.hash)) {
-    items.push({
-      label: 'Use as comparison base',
-      run: () => { onCompare(commit); onFlash('Added to the comparison') },
-    })
-    if (markers.length === 2) {
-      items.push({
-        label: 'Compare the two marked commits',
-        run: () => { onCompareSelected(); onFlash('Comparing') },
+  const target = menu.ref
+  const writing = onAction === undefined ? [] : actions
+
+  const reading = []
+  if (commit !== undefined) {
+    reading.push(
+      { label: 'Copy commit hash', run: () => { copyText(commit.hash); onFlash('Hash copied') } },
+      { label: 'Copy short hash', run: () => { copyText(commit.hash.slice(0, 8)); onFlash('Short hash copied') } },
+      { label: 'Copy subject', run: () => { copyText(commit.subject); onFlash('Subject copied') } },
+      { label: 'Open commit details', run: () => onOpenCommit(commit) },
+    )
+    if (onCompare && markers.includes(commit.hash)) {
+      reading.push({
+        label: 'Use as comparison base',
+        run: () => { onCompare(commit); onFlash('Added to the comparison') },
+      })
+      if (markers.length === 2) {
+        reading.push({
+          label: 'Compare the two marked commits',
+          run: () => { onCompareSelected(); onFlash('Comparing') },
+        })
+      }
+    } else if (onCompare) {
+      reading.push({
+        label: 'Mark for comparison',
+        run: () => { onCompare(commit); onFlash('Marked — pick a second commit') },
       })
     }
-  } else if (onCompare) {
-    items.push({
-      label: 'Mark for comparison',
-      run: () => { onCompare(commit); onFlash('Marked — pick a second commit') },
-    })
+  }
+  if (target !== undefined) {
+    // A ref is worth copying under the name a command would take: the short
+    // name for a reader, the full path for a script.
+    reading.push(
+      { label: `Copy ${target.kind === 'tag' ? 'tag' : 'branch'} name`, run: () => { copyText(target.label); onFlash('Name copied') } },
+      { label: 'Copy full ref name', run: () => { copyText(target.path); onFlash('Ref copied') } },
+    )
+    if (typeof target.target === 'string' && onOpenCommit !== undefined) {
+      reading.push({ label: 'Show the commit it points at', run: () => onOpenCommit({ hash: target.target }) })
+    }
   }
 
   // The menu is placed at the pointer but kept inside the viewport, so a
   // right-click near an edge still shows every item.
-  const width = 230
-  const height = items.length * 26 + 14
-  const left = Math.min(menu.x, window.innerWidth - width - 8)
-  const top = Math.min(menu.y, window.innerHeight - height - 8)
+  const width = 250
+  const height = Math.min((writing.length + reading.length) * 26 + 40, window.innerHeight - 16)
+  const left = Math.min(menu.x, Math.max(8, window.innerWidth - width - 8))
+  const top = Math.min(menu.y, Math.max(8, window.innerHeight - height - 8))
+
+  // The last line names the subject: a commit by its hash, a ref by its full
+  // path, anything else by whatever the caller put in `note`.
+  const note = commit !== undefined
+    ? commit.hash.slice(0, 10)
+    : target !== undefined ? String(target.path ?? '') : String(menu.note ?? '')
+
+  const entry = (item, key) => h('button', {
+    key,
+    type: 'button',
+    className: `gg-menu-item${item.danger === true ? ' is-danger' : ''}`,
+    role: 'menuitem',
+    onClick: () => { item.run(); onClose() },
+  }, item.label)
 
   return h('div', {
     ref,
@@ -240,14 +262,13 @@ export function ContextMenu({ menu, markers, onClose, onOpenCommit, onCompare, o
     style: { left: `${left}px`, top: `${top}px` },
     role: 'menu',
   }, [
-    ...items.map((item, i) => h('button', {
-      key: i,
-      type: 'button',
-      className: 'gg-menu-item',
-      role: 'menuitem',
-      onClick: () => { item.run(); onClose() },
-    }, item.label)),
-    h('div', { key: 'note', className: 'gg-menu-note' }, commit.hash.slice(0, 10)),
+    ...(writing.length === 0 ? [] : [
+      h('div', { key: 'write-heading', className: 'gg-menu-heading' }, 'Actions'),
+      ...writing.map((item, i) => entry({ ...item, run: () => onAction(item) }, `w${i}`)),
+      h('div', { key: 'write-sep', className: 'gg-menu-sep', role: 'separator' }),
+    ]),
+    ...reading.map((item, i) => entry(item, `r${i}`)),
+    ...(note === '' ? [] : [h('div', { key: 'note', className: 'gg-menu-note' }, note)]),
   ])
 }
 

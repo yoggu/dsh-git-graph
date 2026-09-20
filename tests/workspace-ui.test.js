@@ -3,11 +3,12 @@ import { runInNewContext } from 'node:vm'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import * as GitSyntax from '../src/client/syntax.js'
+import { commitActions, describeBadge, initialValues, missingFields, paramsFor, refActions } from '../src/client/actions.js'
 import { diffFileIdentity, parseUnifiedPatch, planSplitRows, resolveDiffLayout } from '../src/client/diff-layout.js'
 
 // Execute the modular source with a minimal hook runner. Pure helpers are
 // imported normally; component source is evaluated only to substitute React.
-const componentPaths = ['ui.js', 'graph-ui.js', 'diff-view.js', 'files.js', 'accordions.js', 'live.js', 'graph-view.js', 'views.js']
+const componentPaths = ['ui.js', 'graph-ui.js', 'diff-view.js', 'files.js', 'accordions.js', 'live.js', 'actions.js', 'dialog.js', 'graph-view.js', 'views.js']
 const sourcePaths = [...componentPaths, 'tabs.js']
 const moduleSource = path => readFileSync(new URL(`../src/client/${path}`, import.meta.url), 'utf8')
 const cleanModule = text => text
@@ -275,7 +276,8 @@ test('file selection is scoped to session and commit', () => {
 test('history refresh keeps the open accordion while replacing commit objects', async () => {
   const pending = []
   const ui = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo() }, request => {
-    if (request.op === 'working') return Promise.resolve({ staged: [], unstaged: [], untracked: [] })
+    const other = aside(request)
+    if (other !== null) return other
     const p = deferred(); pending.push(p); return p.promise
   })
   pending[0].resolve(page(['a', 'b'])); await ui.settle()
@@ -319,7 +321,8 @@ test('older-page accordion restores after remount by reloading the saved depth',
   const hashes = Array.from({ length: 135 }, (_, index) => `commit-${index}`)
   const calls = []
   const respond = request => {
-    if (request.op === 'working') return Promise.resolve({ staged: [], unstaged: [], untracked: [] })
+    const other = aside(request)
+    if (other !== null) return other
     calls.push(request)
     const commits = hashes.slice(request.skip, request.skip + request.limit).map(commit)
     return Promise.resolve({ commits, nextSkip: request.skip + commits.length, exhausted: request.skip + commits.length >= hashes.length, refs: {} })
@@ -354,7 +357,8 @@ test('late diff response cannot overwrite a newer file selection', async () => {
 test('late history response cannot overwrite newer refresh', async () => {
   const pending = []
   const ui = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo() }, request => {
-    if (request.op === 'working') return Promise.resolve({ staged: [], unstaged: [], untracked: [] })
+    const other = aside(request)
+    if (other !== null) return other
     const p = deferred(); pending.push(p); return p.promise
   })
   pending[0].resolve(page(['a'])); await ui.settle()
@@ -408,6 +412,28 @@ test('a commit list that would draw the same graph is recognised as unchanged', 
 
 const quietWorking = () => Promise.resolve({ staged: [], unstaged: [], untracked: [] })
 
+/** A repository with nothing in progress: the state a graph builds its menu from. */
+const idleState = {
+  head: 'a'.repeat(40), branch: 'main', detached: false, operation: null,
+  locked: false, lockPath: null, dirty: false, changedCount: 0, conflicts: [],
+}
+
+/**
+ * Answer the two requests that are not the history read.
+ *
+ * Every graph render asks what the working tree holds and what the repository
+ * is in the middle of — the second is what the action menu is built from. A
+ * responder written to model only the history read would leave those hanging
+ * and count them among the reads it does model, so the tests that count reads
+ * route them through here instead.
+ *
+ * @param request - the request the graph made.
+ * @returns the answer, or `null` for a request the caller models itself.
+ */
+const aside = request => request.op === 'working'
+  ? quietWorking()
+  : request.op === 'state' ? Promise.resolve({ state: idleState }) : null
+
 test('a hidden tab holds no push stream, a visible one subscribes to its session', async () => {
   const respond = request => request.op === 'working' ? quietWorking() : Promise.resolve(page(['a']))
   const hidden = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo(false) }, respond)
@@ -426,7 +452,8 @@ test('a hidden tab holds no push stream, a visible one subscribes to its session
 test('a pushed change reloads the history, and a push that changes nothing stays quiet', async () => {
   const pending = []
   const ui = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo(true) }, request => {
-    if (request.op === 'working') return quietWorking()
+    const other = aside(request)
+    if (other !== null) return other
     const next = deferred(); pending.push(next); return next.promise
   })
   pending[0].resolve(page(['a'])); await ui.settle()
@@ -451,7 +478,8 @@ test('a pushed change reloads the history, and a push that changes nothing stays
 test('a background push failure keeps the rows it could not replace', async () => {
   const pending = []
   const ui = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo(true) }, request => {
-    if (request.op === 'working') return quietWorking()
+    const other = aside(request)
+    if (other !== null) return other
     const next = deferred(); pending.push(next); return next.promise
   })
   pending[0].resolve(page(['a'])); await ui.settle()
@@ -465,7 +493,8 @@ test('a background push failure keeps the rows it could not replace', async () =
 test('a push that lands while the first read is in flight does not leave the spinner on', async () => {
   const pending = []
   const ui = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo(true) }, request => {
-    if (request.op === 'working') return quietWorking()
+    const other = aside(request)
+    if (other !== null) return other
     const next = deferred(); pending.push(next); return next.promise
   })
   assert.ok(find(ui.tree, node => node.props.className === 'gg-history-status'), 'the first read is loading')
@@ -515,7 +544,8 @@ test('a degraded watch is closed and reported instead of looking alive', async (
 test('the header refresh is a button with a spinner, not a clickable heading', async () => {
   const pending = []
   const ui = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo(false) }, request => {
-    if (request.op === 'working') return quietWorking()
+    const other = aside(request)
+    if (other !== null) return other
     const next = deferred(); pending.push(next); return next.promise
   })
   const button = find(ui.tree, node => node.props['aria-label'] === 'Refresh history and working changes')
@@ -537,4 +567,241 @@ test('a fetch report says what happened, and says nothing when nothing did', () 
   assert.equal(describeFetch({ added: [], updated: ['origin/main'], pruned: ['origin/gone'], remotes: ['origin'] }), 'Remote: 1 updated, 1 deleted')
   assert.equal(describeFetch({ added: [], updated: [], pruned: [], skipped: 'no remote is configured' }), 'no remote is configured')
   assert.equal(describeFetch({ error: 'fatal: could not read from remote' }), 'Fetch failed — fatal: could not read from remote')
+})
+
+/* -------------------------------------------------------------------------
+ * Writing actions
+ *
+ * The graph offers them, the dialog confirms them, and the host is the only
+ * thing that decides what they run. These tests pin the three seams: which
+ * entries a menu gets, that the command shown is the one the host planned, and
+ * that a repository which cannot accept an action says so before it runs.
+ * ---------------------------------------------------------------------- */
+
+test('a commit menu offers the writing actions above the reading ones', () => {
+  const picked = []
+  const ui = mount('ContextMenu', {
+    menu: { x: 10, y: 10, commit: commit('abc') },
+    actions: [{ action: 'commit.revert', label: 'Revert this commit', danger: true, params: {} }],
+    onAction: entry => picked.push(entry.action),
+    markers: [], onClose() {}, onOpenCommit() {}, onFlash() {},
+  })
+  const entries = nodes(ui.tree).filter(node => node.props.role === 'menuitem')
+  assert.deepEqual(entries.map(node => node.children.join('')), [
+    'Revert this commit',
+    'Copy commit hash',
+    'Copy short hash',
+    'Copy subject',
+    'Open commit details',
+  ])
+  assert.match(entries[0].props.className, /is-danger/)
+  entries[0].props.onClick()
+  assert.deepEqual(picked, ['commit.revert'], 'the entry hands the action request to the dialog, and runs nothing')
+  ui.unmount()
+})
+
+test('a badge names the exact ref it stands for', () => {
+  const refs = [
+    { name: 'refs/remotes/origin/main', target: 'b'.repeat(40), kind: 'remote' },
+    { name: 'refs/tags/v1.0.0', target: 'c'.repeat(40), kind: 'tag' },
+  ]
+  const remote = describeBadge({ kind: 'remote', label: 'main', remote: 'origin' }, refs)
+  assert.equal(remote.path, 'refs/remotes/origin/main')
+  assert.equal(remote.full, 'origin/main')
+  assert.equal(remote.target, 'b'.repeat(40))
+  const tag = describeBadge({ kind: 'tag', label: 'v1.0.0' }, refs)
+  assert.equal(tag.path, 'refs/tags/v1.0.0')
+  assert.equal(tag.label, 'v1.0.0')
+  // A detached HEAD names no ref, so it gets no ref menu.
+  assert.equal(describeBadge({ kind: 'detached', label: 'HEAD' }, refs), null)
+})
+
+test('the actions a menu offers never send an empty field as a value', () => {
+  const hash = 'a'.repeat(40)
+  const entries = commitActions({ hash, subject: 'x' }, { branch: 'main', remotes: ['origin'] })
+  assert.ok(entries.every(entry => typeof entry.action === 'string' && typeof entry.title === 'string'))
+
+  const tag = entries.find(entry => entry.action === 'tag.add')
+  assert.deepEqual(initialValues(tag), { name: '', message: '' })
+  assert.deepEqual(missingFields(tag, initialValues(tag)), ['Tag name'])
+  assert.deepEqual(missingFields(tag, { name: 'v1', message: '' }), [])
+  // An empty message is left out rather than sent as an empty string, which
+  // would turn a lightweight tag into an annotated one.
+  assert.deepEqual(paramsFor(tag, { name: 'v1', message: '' }), { hash, name: 'v1' })
+  assert.deepEqual(paramsFor(tag, { name: 'v1', message: 'Release' }), { hash, name: 'v1', message: 'Release' })
+
+  // A checkbox that is off is still sent, because the host reads `true`.
+  const branch = entries.find(entry => entry.action === 'commit.createBranch')
+  assert.deepEqual(paramsFor(branch, { name: 'x', checkout: false }), { hash, name: 'x', checkout: false })
+})
+
+test('the current branch offers push and pull; another branch offers checkout, merge and delete', () => {
+  const ctx = { branch: 'main', remotes: ['origin'] }
+  const current = refActions({ kind: 'head', label: 'main' }, ctx).map(entry => entry.action)
+  assert.deepEqual(current, ['branch.push', 'branch.pull'])
+
+  const other = refActions({ kind: 'branch', label: 'feature' }, ctx).map(entry => entry.action)
+  assert.deepEqual(other, ['branch.checkout', 'branch.merge', 'branch.rebase', 'branch.rename', 'branch.delete'])
+  assert.ok(!other.includes('branch.delete') === false)
+
+  // Without a remote there is nothing to push to, so those entries are absent
+  // rather than offered and then refused.
+  assert.deepEqual(refActions({ kind: 'head', label: 'main' }, { branch: 'main', remotes: [] }), [])
+})
+
+test('the dialog shows the command the host planned, and where the repository stands', async () => {
+  const requests = []
+  const ui = mount('ActionDialog', {
+    request: { action: 'commit.revert', title: 'Revert aaaaaaaa', params: { hash: 'a'.repeat(40) } },
+    sessionId: 'one',
+    signal: tabInfo().tab.signal,
+    onClose() {},
+    onDone() {},
+  }, request => {
+    requests.push(request)
+    return request.op === 'plan'
+      ? Promise.resolve({
+        plan: { summary: 'git revert --no-edit aaaaaaaa' },
+        state: idleState,
+        warnings: ['This discards commits or files and cannot be undone from this view.'],
+        blocked: null,
+      })
+      : Promise.resolve({ output: 'nothing ran yet' })
+  })
+  await ui.settle()
+
+  assert.equal(requests[0].op, 'plan', 'the dialog asks before it offers to run anything')
+  assert.equal(requests[0].action, 'commit.revert')
+  // Spread into this realm: the object was built inside the evaluated module.
+  assert.deepEqual({ ...requests[0].params }, { hash: 'a'.repeat(40) })
+  assert.equal(requests.length, 1, 'planning is not running')
+  assert.equal(find(ui.tree, node => node.props.className === 'gg-argv').children.join(''), 'git revert --no-edit aaaaaaaa')
+  assert.match(find(ui.tree, node => node.props.className === 'gg-dialog-state').children.join(''), /on main · clean working tree/)
+  assert.equal(find(ui.tree, node => node.props.className === 'gg-dialog-warnings').children.length, 1)
+  assert.equal(find(ui.tree, node => node.type === 'button' && node.props.type === 'submit').props.disabled, false)
+  ui.unmount()
+})
+
+test('confirming the dialog runs the action and reports what git said', async () => {
+  const done = []
+  const seen = []
+  const ui = mount('ActionDialog', {
+    request: { action: 'working.stash', title: 'Stash uncommitted changes', params: {} },
+    sessionId: 'one',
+    signal: tabInfo().tab.signal,
+    onClose() {},
+    onDone: result => done.push(result),
+  }, request => {
+    seen.push(request.op)
+    return request.op === 'plan'
+      ? Promise.resolve({ plan: { summary: 'git stash push' }, state: idleState, warnings: [], blocked: null })
+      : Promise.resolve({ output: 'Saved working directory and index state' })
+  })
+  await ui.settle()
+  find(ui.tree, node => node.type === 'form').props.onSubmit({ preventDefault() {} })
+  await ui.settle()
+
+  assert.deepEqual(seen, ['plan', 'action'])
+  assert.deepEqual(done, [{ output: 'Saved working directory and index state' }])
+  ui.unmount()
+})
+
+test('an action the repository cannot accept is refused before it runs', async () => {
+  const seen = []
+  const ui = mount('ActionDialog', {
+    request: { action: 'branch.checkout', title: 'Check out feature', params: { name: 'feature' } },
+    sessionId: 'one',
+    signal: tabInfo().tab.signal,
+    onClose() {},
+    onDone() {},
+  }, request => {
+    seen.push(request.op)
+    return Promise.resolve({
+      plan: { summary: 'git checkout feature' },
+      state: { ...idleState, operation: 'merge', busy: true, conflicts: ['a.txt'], dirty: true, changedCount: 1 },
+      warnings: ['The working tree has 1 uncommitted change.'],
+      blocked: 'dsh-git-graph: a merge is in progress.',
+    })
+  })
+  await ui.settle()
+
+  assert.match(find(ui.tree, node => node.props.className === 'gg-blocked').children.join(''), /merge is in progress/)
+  assert.match(find(ui.tree, node => node.props.className === 'gg-dialog-state').children.join(''), /merge in progress · 1 conflicted file/)
+  assert.equal(find(ui.tree, node => node.type === 'button' && node.props.type === 'submit').props.disabled, true)
+  find(ui.tree, node => node.type === 'form').props.onSubmit({ preventDefault() {} })
+  await ui.settle()
+  assert.deepEqual(seen, ['plan'], 'a refused action is never sent to the host')
+  ui.unmount()
+})
+
+test('a half-finished operation replaces the action menu with its way out', async () => {
+  const ui = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo() }, request => {
+    const other = aside(request)
+    if (other !== null && request.op !== 'state') return other
+    if (request.op === 'state') {
+      return Promise.resolve({
+        state: { ...idleState, operation: 'merge', busy: true, dirty: true, changedCount: 1, conflicts: ['a.txt'] },
+      })
+    }
+    if (request.op === 'plan') return Promise.resolve({ plan: { summary: 'git merge --abort' }, state: idleState, warnings: [], blocked: null })
+    return Promise.resolve(page(['a']))
+  })
+  await ui.settle()
+
+  const banner = find(ui.tree, node => node.props.className === 'gg-op-banner')
+  assert.ok(banner, 'the banner must be rendered')
+  const abort = nodes(banner).find(node => node.type === 'button')
+  assert.equal(abort.children.join(''), 'Abort the merge')
+  abort.props.onClick()
+  await ui.settle()
+  // A GraphView mount renders its children as descriptors, so what this pins is
+  // that the banner hands the right request to the dialog — the dialog's own
+  // drawing is covered by the ActionDialog tests above.
+  const dialog = nodes(ui.tree).find(node => node.type?.name === 'ActionDialog')
+  assert.ok(dialog, 'the way out opens the confirmation dialog')
+  assert.equal(dialog.props.request.action, 'merge.abort')
+  assert.equal(dialog.props.request.danger, true)
+  ui.unmount()
+})
+
+test('a file in the working tree offers to discard its changes', async () => {
+  const ui = mount('WorkingAccordion', {
+    files: [{ path: 'a.txt', status: 'M', group: 'unstaged' }],
+    sessionId: 'one',
+    signal: tabInfo().tab.signal,
+    tabInfo: tabInfo(),
+    height: 300,
+    split: 50,
+    onHeightChange() {},
+    onSplitChange() {},
+  }, request => request.op === 'plan'
+    ? Promise.resolve({ plan: { summary: 'git checkout -- a.txt' }, state: idleState, warnings: [], blocked: null })
+    : Promise.resolve({}))
+  // The list itself is a child component, which this harness renders as a
+  // descriptor; calling its handler is exactly what the list would do.
+  const tree = nodes(ui.tree).find(node => node.type?.name === 'ChangedTree')
+  assert.ok(tree, 'the working tree must list its files')
+  assert.equal(typeof tree.props.onContextMenu, 'function')
+  tree.props.onContextMenu({ preventDefault() {}, clientX: 5, clientY: 5 }, { path: 'a.txt', status: 'M', group: 'unstaged' })
+  ui.render()
+
+  const menu = nodes(ui.tree).find(node => node.type?.name === 'ContextMenu')
+  assert.ok(menu, 'the file menu opens')
+  // Spread into this realm: the entries were built inside the evaluated module.
+  assert.deepEqual([...menu.props.actions].map(entry => entry.label), ['Discard changes in a.txt…'])
+  assert.equal(menu.props.actions[0].danger, true)
+  menu.props.onAction(menu.props.actions[0])
+  await ui.settle()
+
+  const dialog = nodes(ui.tree).find(node => node.type?.name === 'ActionDialog')
+  assert.ok(dialog, 'the file menu opens the confirmation dialog')
+  assert.equal(dialog.props.request.action, 'working.discard')
+  assert.equal(dialog.props.request.danger, true)
+  // Through JSON: the parameters were built inside the evaluated module.
+  // `source` is not among them — it is the field the dialog collects, and an
+  // unstaged file starts by restoring from the index.
+  assert.deepEqual(JSON.parse(JSON.stringify(dialog.props.request.params)), { paths: ['a.txt'] })
+  const source = [...dialog.props.request.fields].find(field => field.name === 'source')
+  assert.equal(source.initial, 'index')
+  ui.unmount()
 })

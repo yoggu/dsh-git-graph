@@ -1,8 +1,10 @@
 import * as React from 'react'
+import { fileActions } from './actions.js'
 import { call } from './api.js'
 import { ACCORDION_H, ACCORDION_MAX_H, ACCORDION_MIN_H, ACCORDION_SPLIT, EMPTY_TREE } from './constants.js'
+import { ActionDialog } from './dialog.js'
 import { ChangedTree, openDiffTab } from './files.js'
-import { formatDate } from './ui.js'
+import { ContextMenu, formatDate } from './ui.js'
 
 const h = React.createElement
 
@@ -66,17 +68,63 @@ export function CommitAccordion({ hash, sessionId, signal, revision = 0, onSelec
     second: h('section', { className: 'gg-accordion-files' }, h(ChangedTree, { files: detail.files, onOpen: openFile })) })
 }
 
-export function WorkingAccordion({ files = [], tabInfo, height, split, onHeightChange, onSplitChange }) {
+/**
+ * The accordion for the uncommitted changes, with each file's own action.
+ *
+ * This is the one accordion that owns a confirmation dialog rather than asking
+ * the graph for one: discarding a file is a decision about that file, made
+ * where the file is listed, and the graph re-reads on its own when the change
+ * reaches the repository watch.
+ *
+ * @param props - the files, the session, and how to report a change upward.
+ * @returns the accordion, and its menu and dialog when either is open.
+ */
+export function WorkingAccordion({ files = [], sessionId, signal, tabInfo, onChanged, height, split, onHeightChange, onSplitChange }) {
+  const [menu, setMenu] = React.useState(null)
+  const [pending, setPending] = React.useState(null)
+  const [notice, setNotice] = React.useState(null)
+  const timer = React.useRef(null)
+  React.useEffect(() => () => clearTimeout(timer.current), [])
+  const flash = text => {
+    setNotice(text)
+    clearTimeout(timer.current)
+    timer.current = setTimeout(() => setNotice(null), 2600)
+  }
   const openFile = file => openDiffTab(tabInfo, { mode: 'working', base: 'HEAD', head: '', path: file.path, oldPath: file.oldPath, group: file.group, staged: file.group === 'staged' })
   const groups = ['staged', 'unstaged', 'untracked']
-  return h(AccordionSurface, { id: 'gg-accordion-WORKTREE', label: 'Uncommitted changes', height, split, onHeightChange, onSplitChange,
-    first: h('section', { className: 'gg-accordion-meta' },
-      h('dl', { className: 'gg-meta' }, h('dt', null, 'Status:'), h('dd', null, 'Uncommitted changes'), h('dt', null, 'Files:'), h('dd', null, files.length)),
-      h('p', { className: 'gg-accordion-message' }, 'Read-only snapshot of staged, unstaged and untracked files.')),
-    second: h('section', { className: 'gg-accordion-files gg-accordion-working' }, groups.map(group => {
-      const entries = files.filter(file => file.group === group)
-      if (!entries.length) return null
-      return h('div', { key: group, className: 'gg-working-group' }, h('div', { className: 'gg-working-title' }, `${group[0].toUpperCase()}${group.slice(1)} (${entries.length})`), h(ChangedTree, { files: entries, onOpen: openFile }))
-    })) })
+  return h(React.Fragment, null,
+    notice === null ? null : h('div', { className: 'gg-notice', role: 'status' }, notice),
+    h(AccordionSurface, { id: 'gg-accordion-WORKTREE', label: 'Uncommitted changes', height, split, onHeightChange, onSplitChange,
+      first: h('section', { className: 'gg-accordion-meta' },
+        h('dl', { className: 'gg-meta' }, h('dt', null, 'Status:'), h('dd', null, 'Uncommitted changes'), h('dt', null, 'Files:'), h('dd', null, files.length)),
+        h('p', { className: 'gg-accordion-message' }, 'Staged, unstaged and untracked files. Right-click a file to discard its changes.')),
+      second: h('section', { className: 'gg-accordion-files gg-accordion-working' }, groups.map(group => {
+        const entries = files.filter(file => file.group === group)
+        if (!entries.length) return null
+        return h('div', { key: group, className: 'gg-working-group' }, h('div', { className: 'gg-working-title' }, `${group[0].toUpperCase()}${group.slice(1)} (${entries.length})`),
+          h(ChangedTree, {
+            files: entries,
+            onOpen: openFile,
+            onContextMenu: (event, file) => setMenu({ x: event.clientX, y: event.clientY, file, note: file.path }),
+          }))
+      })) }),
+    menu === null ? null : h(ContextMenu, {
+      menu,
+      actions: fileActions(menu.file),
+      onAction: setPending,
+      onClose: () => setMenu(null),
+      onFlash: flash,
+    }),
+    pending === null ? null : h(ActionDialog, {
+      request: pending,
+      sessionId,
+      signal,
+      onClose: () => setPending(null),
+      onDone: result => {
+        setPending(null)
+        flash(String(result?.output ?? '').split('\n')[0] || 'Discarded')
+        onChanged?.()
+      },
+    }))
 }
 

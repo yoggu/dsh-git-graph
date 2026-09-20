@@ -73,6 +73,8 @@ export function groupRefs(refs, remotes) {
     key: `${ref.kind}:${ref.label}`,
     kind: ref.kind,
     text: ref.label,
+    label: ref.label,
+    remote: null,
     title,
     remotes: [],
   })
@@ -94,7 +96,9 @@ export function groupRefs(refs, remotes) {
       }
       continue
     }
-    entries.push({ key: `remote:${text}`, kind: 'remote', text, title: text, remotes: [] })
+    entries.push({
+      key: `remote:${text}`, kind: 'remote', text, label: ref.label, remote: ref.remote, title: text, remotes: [],
+    })
   }
   const seen = new Set()
   return entries.filter(entry => seen.has(entry.key) ? false : (seen.add(entry.key), true))
@@ -109,15 +113,25 @@ export function groupRefs(refs, remotes) {
  * Code Git Graph uses, so `main` next to a remote reads as one branch that is
  * in sync rather than as two branches that happen to share a name.
  *
+ * A badge is also where a branch's own actions start: the press is stopped
+ * here, so right-clicking a label opens the branch's menu rather than the
+ * commit row's.
+ *
  * @param refs - the row's already-grouped badges.
+ * @param onContextMenu - asked to open a menu for the badge that was pressed.
  * @returns the badge elements.
  */
-export function RefBadges({ refs }) {
+export function RefBadges({ refs, onContextMenu }) {
   if (refs.length === 0) return null
   return h('span', { className: 'gg-refs' }, refs.slice(0, 3).map(ref => h('span', {
     key: ref.key,
     className: `gg-ref gg-ref-${ref.kind}`,
     title: ref.title,
+    onContextMenu: onContextMenu === undefined ? undefined : (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      onContextMenu(event, ref)
+    },
   }, h('span', { className: 'gg-ref-icon' }, h(GitIcon, { name: 'branch', size: 13 })),
   h('span', { className: 'gg-ref-name' }, ref.text),
   ...ref.remotes.map(remote => h('span', {
@@ -188,7 +202,7 @@ export function GraphCanvas({ rows, edges, columnCount, height, expandedRow = -1
  * @param props - the row, the indent, the selection state, and the actions.
  * @returns the row element.
  */
-export function CommitRow({ row, indent, dense, remotes, selected, comparing, onSelect, onCompare, onContextMenu }) {
+export function CommitRow({ row, indent, dense, remotes, selected, comparing, onSelect, onCompare, onContextMenu, onRefContextMenu }) {
   const commit = row.commit
   const when = new Date(commit.authorDate)
   const stamp = Number.isNaN(when.getTime())
@@ -224,7 +238,7 @@ export function CommitRow({ row, indent, dense, remotes, selected, comparing, on
   },
   h('span', { className: 'gg-row-body' },
     h('span', { className: 'gg-description' },
-      grouped.length > 0 ? h(RefBadges, { refs: grouped }) : null,
+      grouped.length > 0 ? h(RefBadges, { refs: grouped, onContextMenu: onRefContextMenu }) : null,
       h('span', { className: 'gg-subject', title: commit.subject }, commit.subject)),
     h('span', { className: 'gg-row-meta' },
       h('span', { className: 'gg-author' }, commit.synthetic ? `${commit.count ?? 0} files` : commit.authorName),

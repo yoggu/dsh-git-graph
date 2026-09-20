@@ -11,6 +11,11 @@ test('a remote-tracking branch on its local branch commit folds into that badge'
     key: 'head:main',
     kind: 'head',
     text: 'main',
+    // The short name and the remote travel with the badge so a right-click can
+    // name the ref it stands for — `refs/heads/main`, `origin/main` — rather
+    // than re-parsing the label.
+    label: 'main',
+    remote: null,
     title: 'HEAD is at main',
     remotes: [{ name: 'origin', full: 'origin/main' }],
   }])
@@ -32,6 +37,8 @@ test('a diverged remote keeps its own full-name badge', () => {
     key: 'remote:origin/main',
     kind: 'remote',
     text: 'origin/main',
+    label: 'main',
+    remote: 'origin',
     title: 'origin/main',
     remotes: [],
   }])

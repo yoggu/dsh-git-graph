@@ -311,4 +311,65 @@ export const CSS = `
 .gg-commit-extra .gg-link { margin: 4px 6px 0 0; }
 @container (max-width: 350px) { .gg-readonly { display: none; } }
 
+/* A writing action is longer than the four read entries the menu used to hold,
+   so it scrolls rather than running off the bottom of a short sidebar. */
+.gg-menu { max-height: min(72vh, 560px); overflow: auto; }
+.gg-menu-heading { padding: 5px 8px 2px; color: var(--dsw-alias-label-secondary);
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; }
+.gg-menu-sep { height: 1px; margin: 4px 5px; background: var(--dsw-alias-border-l1); }
+/* A destructive entry is marked by colour and by name; colour alone would be
+   the only signal in a theme that renders it near the ordinary ink. */
+.gg-menu-item.is-danger { color: var(--dsw-alias-state-error-primary, #cb2431); }
+
+/* A half-finished operation owns the top of the graph: until it is resolved the
+   host refuses every other write, so the way out is offered where the graph is. */
+.gg-op-banner { display: flex; flex: none; align-items: center; flex-wrap: wrap; gap: 7px;
+  padding: 5px 10px; border-bottom: 1px solid var(--dsw-alias-border-l1);
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary, #d29922) 14%, transparent);
+  color: var(--dsw-alias-label-primary); font-size: 11px; }
+.gg-op-banner .gg-op-text { margin-inline-end: auto; }
+
+/* The confirmation dialog dims the graph so the decision is the only thing on
+   screen; a press on the backdrop cancels it. */
+.gg-modal { position: fixed; inset: 0; z-index: 960; display: flex; align-items: center;
+  justify-content: center; padding: 16px; background: rgba(0, 0, 0, .42); }
+.gg-dialog { display: flex; flex-direction: column; gap: 9px; width: min(430px, 100%);
+  max-height: 100%; overflow: auto; padding: 14px; border-radius: 8px;
+  color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base);
+  border: 1px solid var(--dsw-alias-border-l2); box-shadow: var(--dsw-shadow-lv3);
+  font-size: 12px; }
+.gg-dialog.is-danger { border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary, #cb2431) 55%, var(--dsw-alias-border-l2)); }
+.gg-dialog-title { margin: 0; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.gg-dialog-note { margin: 0; color: var(--dsw-alias-label-secondary); }
+.gg-dialog-state { margin: 0; padding: 4px 6px; border-radius: 4px; overflow-wrap: anywhere;
+  background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary);
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.gg-dialog-review { display: flex; flex-direction: column; gap: 5px; }
+.gg-field { display: flex; flex-direction: column; gap: 3px; }
+.gg-field-label { color: var(--dsw-alias-label-secondary); font-size: 11px; }
+.gg-field input[type=text] { box-sizing: border-box; width: 100%; height: 26px; padding: 0 7px;
+  color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-2);
+  border: 1px solid var(--dsw-alias-border-l1); border-radius: 4px; font: 12px/24px inherit; }
+.gg-field input[type=text]:focus-visible { outline: 1px solid var(--dsw-alias-brand-primary); outline-offset: -1px; }
+.gg-field-select { width: 100%; height: 26px; }
+.gg-field-select .gg-du-dropdown-menu { max-width: none; }
+.gg-field-check { flex-direction: row; align-items: center; gap: 6px; }
+.gg-field-check .gg-field-help { flex-basis: 100%; }
+.gg-field-help { color: var(--dsw-alias-label-secondary); font-size: 10.5px; }
+.gg-argv { display: block; padding: 5px 7px; border-radius: 4px; overflow-wrap: anywhere;
+  background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary);
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.gg-dialog-warnings { margin: 0; padding-left: 16px; font-size: 11px;
+  color: var(--dsw-alias-state-warn-primary, #d29922); }
+.gg-blocked { margin: 0; font-size: 11px; color: var(--dsw-alias-state-error-primary, #cb2431); }
+.gg-dialog-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 3px; }
+.gg-btn { height: 26px; padding: 0 11px; border-radius: 4px; cursor: pointer;
+  color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-2);
+  border: 1px solid var(--dsw-alias-border-l1); font: 12px/24px inherit; }
+.gg-btn:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover, var(--dsw-alias-bg-layer-2)); }
+.gg-btn:disabled { opacity: .45; cursor: default; }
+.gg-btn.is-primary { font-weight: 600; border-color: transparent;
+  color: var(--dsw-alias-bg-base); background: var(--dsw-alias-brand-primary); }
+.gg-btn.is-primary.is-danger { background: var(--dsw-alias-state-error-primary, #cb2431); color: #fff; }
+
 `

@@ -61,7 +61,20 @@ export function FileIcon({ path = '', folder = false }) {
     : h(React.Fragment, null, h('path', { d: 'M3 1.5h6.5l3.5 3.5v9.5H3z' }), h('path', { className: 'gg-file-icon-fold', d: 'M9.5 1.5V5H13' })))
 }
 
-export function ChangedTree({ files = [], onOpen, empty = 'No changed files.' }) {
+/**
+ * One changed file's tree.
+ *
+ * A file row that carries a context-menu handler offers that file's own
+ * actions — discarding it, for the working tree — while a click still opens
+ * its diff.
+ *
+ * @param files - the flat file entries.
+ * @param onOpen - opening one file's diff.
+ * @param onContextMenu - asked to open a menu for the pressed file.
+ * @param empty - what to say when there is nothing to list.
+ * @returns the tree element.
+ */
+export function ChangedTree({ files = [], onOpen, onContextMenu, empty = 'No changed files.' }) {
   const tree = React.useMemo(() => makeFileTree(files), [files])
   const renderNode = (node, prefix = '') => {
     const folders = [...node.folders.values()].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
@@ -77,6 +90,10 @@ export function ChangedTree({ files = [], onOpen, empty = 'No changed files.' })
       const title = file.oldPath ? `${file.oldPath} → ${file.path}` : file.path
       return h('button', { key: `${prefix}${file.path}:${file.group || ''}`, type: 'button', className: 'gg-file gg-tree-file', title,
         'data-status': status.code, onClick: () => onOpen?.(file),
+        onContextMenu: onContextMenu === undefined ? undefined : (event) => {
+          event.preventDefault()
+          onContextMenu(event, file)
+        },
       }, h(FileIcon, { path: file.path }), h('span', { className: 'gg-sr-only' }, `${status.title}: `),
       h('span', { className: 'gg-path' }, file.oldPath && file.oldPath !== file.path ? `${file.oldPath} → ${file.path}` : file.path), changeCounts(file))
     })]
