@@ -175,17 +175,6 @@ test('the Git graph guide capsule carries the tab’s branch glyph', () => {
   assert.match(source, /\.gg-guide-icon\s*\{[^}]*color: #ed7957;/)
 })
 
-test('a failed working-tree read reports itself instead of crashing the view', async () => {
-  const ui = mount('ChangesView',
-    { sessionId: 'a', tabInfo: { tab: { signal: new AbortController().signal } } },
-    () => Promise.reject(new Error('This session is not running')))
-  await ui.settle()
-  const summary = find(ui.tree, node => node.props.className === 'gg-diff-summary')
-  assert.equal(summary.children.join(''), 'Snapshot unavailable')
-  assert.match(find(ui.tree, node => node.props.className === 'gg-error').children.join(''), /not running/)
-  ui.unmount()
-})
-
 test('a failed working-tree read reports itself instead of looking like a clean tree', async () => {
   const ui = mount('GraphView', { sessionId: 'a', tabInfo: tabInfo() }, request => request.op === 'working'
     ? Promise.reject(new Error('This session is not running'))
@@ -381,8 +370,8 @@ test('late history response cannot overwrite newer refresh', async () => {
 })
 
 test('all tab bodies reset their child on session or workspace changes', () => {
-  const context = { h, sessionOf: props => props, GraphView() {}, CommitView() {}, DiffView() {}, ChangesView() {} }
-  for (const [name, next] of [['GraphBody', 'CommitBody'], ['CommitBody', 'DiffBody'], ['DiffBody', 'ChangesBody'], ['ChangesBody', 'GraphTitle']]) {
+  const context = { h, sessionOf: props => props, GraphView() {}, CommitView() {}, DiffView() {} }
+  for (const [name, next] of [['GraphBody', 'CommitBody'], ['CommitBody', 'DiffBody'], ['DiffBody', 'GraphTitle']]) {
     const component = runInNewContext(`${section(name, next)}\n${name}`, context)
     const render = (sessionId, cwd) => component({ sessionId, cwd, useTabInfo: tabInfo }).children[0]
     const first = render('one', '/a').props.key

@@ -138,7 +138,8 @@ test('history loading is a progress status and terminal pagination renders no fa
 })
 
 test('diff tab definition is multi-instance and sidebar has no review-comment UI or storage', () => {
-  const definition = source.slice(source.indexOf('id: DIFF_ID'), source.indexOf('id: CHANGES_ID'))
+  const diffStart = source.indexOf('id: DIFF_ID')
+  const definition = source.slice(diffStart, source.indexOf('\n]', diffStart))
   assert.match(definition, /multiple:\s*true/, 'each clicked file must be able to open its own diff tab')
   assert.doesNotMatch(appSource, /review comment|reviewComment|review-comments|ReviewComment|commentStorage/i)
   assert.doesNotMatch(appSource, /localStorage|sessionStorage|indexedDB/i)

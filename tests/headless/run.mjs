@@ -112,7 +112,7 @@ const waitDiff = async path => {
 try {
   await page.goto(origin)
   await waitGraph()
-  check('Actual client registers four tab types and Git icon', await page.locator('.fixture-title svg').count() === 1 && await page.evaluate(() => testState.registrations.length) === 4)
+  check('Actual client registers three tab types and Git icon', await page.locator('.fixture-title svg').count() === 1 && await page.evaluate(() => testState.registrations.length) === 3)
   check('History exposes Graph, Description, Date, Author, Commit columns', (await text('.gg-column-heading')).replace(/\n/g, ' ').includes('Graph Description Date Author Commit'))
   check('Graph header has no embedded History or Changes tabs', await page.locator('.gg-modes, .gg-mode').count() === 0)
   check('Exhausted history has no fake All commits loaded button', await page.getByText('All commits loaded', { exact: true }).count() === 0)

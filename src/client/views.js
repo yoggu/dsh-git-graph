@@ -3,7 +3,7 @@ import { call } from './api.js'
 import { EMPTY_TREE } from './constants.js'
 import { DiffPanel } from './diff-view.js'
 import { FileWorkspace } from './files.js'
-import { GitIcon, copyText, formatDate, formatTime } from './ui.js'
+import { GitIcon, copyText, formatDate } from './ui.js'
 
 const h = React.createElement
 
@@ -42,29 +42,3 @@ export function CommitView({ tabInfo, sessionId }) {
 export function DiffView({ tabInfo, sessionId }) {
   return h(DiffPanel, { sessionId, signal: tabInfo.tab.signal, params: tabInfo.tab.navigation?.params ?? {} })
 }
-
-export function ChangesView({ tabInfo, sessionId, revision = 0 }) {
-  const signal = tabInfo.tab.signal
-  const [state, setState] = React.useState({ files: [], busy: true, error: null, readAt: null })
-  const [refresh, setRefresh] = React.useState(0)
-  React.useEffect(() => {
-    let active = true
-    setState(current => ({ ...current, busy: true, error: null }))
-    call({ op: 'working', sessionId }, signal).then(result => {
-      if (!active) return
-      const files = ['staged', 'unstaged', 'untracked'].flatMap(group => (result[group] ?? []).map(entry => ({ ...entry, group, staged: group === 'staged' })))
-      setState({ files, busy: false, error: null, readAt: new Date() })
-    }).catch(error => { if (active && error.name !== 'AbortError') setState(current => ({ ...current, busy: false, error: String(error.message ?? error) })) })
-    return () => { active = false }
-  }, [sessionId, signal, revision, refresh])
-  const readAt = formatTime(state.readAt)
-  return h('section', { className: 'gg-root', 'aria-label': 'Working changes' },
-    h('div', { className: 'gg-toolbar' }, h('span', { className: 'gg-repo' }, 'Working changes'),
-      h('span', { className: 'gg-count' }, `${state.files.length} files`),
-      h('button', { className: 'gg-icon-btn', 'aria-label': 'Refresh changes', disabled: state.busy, onClick: () => setRefresh(value => value + 1) }, h(GitIcon, { name: 'refresh' }))),
-    h('div', { className: 'gg-diff-summary', role: 'status' }, state.busy ? 'Reading working tree…' : readAt === null ? 'Snapshot unavailable' : `Snapshot ${readAt} · refresh to see the agent’s latest edits`),
-    state.error ? h('div', { className: 'gg-error', role: 'alert' }, state.error) : null,
-    !state.busy && !state.error && state.files.length === 0 ? h('div', { className: 'gg-empty' }, 'Working tree clean. No uncommitted changes.') : null,
-    h(FileWorkspace, { files: state.files, mode: 'working', sessionId, signal, tabInfo, revision: revision + refresh }))
-}
-

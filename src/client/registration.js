@@ -1,9 +1,9 @@
-import { CHANGES_ID, COMMIT_ID, DIFF_ID, ID } from './constants.js'
+import { COMMIT_ID, DIFF_ID, ID } from './constants.js'
 import { CSS } from './styles.js'
-import { ChangesBody, ChangesTitle, CommitBody, CommitTitle, definitions, DiffBody, DiffTitle, GraphBody, GraphTitle } from './tabs.js'
+import { CommitBody, CommitTitle, definitions, DiffBody, DiffTitle, GraphBody, GraphTitle } from './tabs.js'
 
 /**
- * Register the four tab types, their bodies and titles, and the styles.
+ * Register the three tab types, their bodies and titles, and the styles.
  *
  * Every registration is an `ctx.effect`, so unloading this plugin removes
  * the tab types, every slot, and the stylesheet together.
@@ -15,7 +15,6 @@ export function apply(ctx) {
     [ID, GraphBody, GraphTitle],
     [COMMIT_ID, CommitBody, CommitTitle],
     [DIFF_ID, DiffBody, DiffTitle],
-    [CHANGES_ID, ChangesBody, ChangesTitle],
   ]
   for (const definition of definitions) {
     ctx.effect(() => ctx.sidebarRightTabs.register(definition), `git-graph: ${definition.kind} type`)

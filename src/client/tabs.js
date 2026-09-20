@@ -1,7 +1,7 @@
 import * as React from 'react'
-import { CHANGES_ID, CHANGES_KIND, COMMIT_ID, COMMIT_KIND, DIFF_ID, DIFF_KIND, ID, KIND } from './constants.js'
+import { COMMIT_ID, COMMIT_KIND, DIFF_ID, DIFF_KIND, ID, KIND } from './constants.js'
 import { GraphView } from './graph-view.js'
-import { ChangesView, CommitView, DiffView } from './views.js'
+import { CommitView, DiffView } from './views.js'
 import { GitIcon, GuideGlyph } from './ui.js'
 
 const h = React.createElement
@@ -63,21 +63,6 @@ export function DiffBody(props) {
   return h('div', { className: 'gg-host' }, h(DiffView, { key: `${sessionId}:${cwd}`, tabInfo, sessionId }))
 }
 
-/**
- * The Changes tab's body.
- *
- * @param props - the slot's framework-injected props.
- * @returns the view.
- */
-export function ChangesBody(props) {
-  const tabInfo = props.useTabInfo()
-  const { sessionId, cwd } = sessionOf(props)
-  if (cwd === undefined || cwd === null) {
-    return h('div', { className: 'gg-empty' }, 'This session has no workspace directory yet.')
-  }
-  return h('div', { className: 'gg-host' }, h(ChangesView, { key: `${sessionId}:${cwd}`, tabInfo, sessionId }))
-}
-
 /** The graph tab's chip title. */
 export function GraphTitle() {
   return h('span', { className: 'gg-tab-title' }, h('span', { className: 'gg-tab-icon' }, h(GitIcon, { name: 'branch' })), 'Git')
@@ -109,11 +94,6 @@ export function DiffTitle({ useTabInfo }) {
   return parts[parts.length - 1] || 'Diff'
 }
 
-/** The Changes tab's chip title. */
-export function ChangesTitle() {
-  return 'Changes'
-}
-
 /** The tab types this package registers. */
 export const definitions = [
   {
@@ -140,12 +120,6 @@ export const definitions = [
     priority: 'extension',
     multiple: true,
      title: () => 'Diff',
-  },
-  {
-    id: CHANGES_ID,
-    kind: CHANGES_KIND,
-    priority: 'extension',
-    title: () => 'Changes',
   },
 ]
 

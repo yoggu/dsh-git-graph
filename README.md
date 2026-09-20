@@ -25,8 +25,6 @@ outside that sidebar.
   letters and colors, plus per-file added/deleted line counts when Git reports them.
 - Clicking a changed file opens a separate **Diff** tab. Each file can have its
   own tab, so the graph and other open diffs remain available.
-- **Changes** remains available for staged, unstaged, and untracked groups and
-  refreshes from the repository without writing to it.
 - The graph keeps itself current. The host watches the repository's Git
   directory and pushes one event per burst of changes over a server-sent event
   stream, so a commit made while you are looking at the tab appears on its own —
@@ -103,7 +101,7 @@ opens views; it offers no mutating Git action.
   so a graph nobody is looking at costs nothing, and it debounces a burst into
   one push. If the watch cannot start, the stream says so and the browser falls
   back to refreshing when the tab comes back into view.
-- `src/client/` — the modular browser source. It registers four tab types in the
+- `src/client/` — the modular browser source. It registers three tab types in the
   right Sidebar and renders the graph, details and patches. Its imports follow an
   acyclic entry → registration → views → helpers direction, with `live.js`
   owning the push channel.

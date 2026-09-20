@@ -21,9 +21,8 @@ const props = () => ({ sessionId: fixtureSession, useTabInfo: tabInfo,
   useSessions: selector => selector({ byId: { [fixtureSession]: { cwd: '/test-repository' } } }) })
 function mount() {
   const id = view === 'git-graph' ? 'dsh-git-graph'
-    : view === 'git-changes' ? 'dsh-git-graph/changes'
-      : view === 'git-diff' ? 'dsh-git-graph/diff'
-        : 'dsh-git-graph/commit'
+    : view === 'git-diff' ? 'dsh-git-graph/diff'
+      : 'dsh-git-graph/commit'
   const Body = seats.get(`sidebar.right.pane.tab:${id}`)
   const Title = seats.get(`sidebar.right.pane.tab.title:${id}`)
   renderRoot ||= createRoot(document.getElementById('root'))
