@@ -39,6 +39,24 @@ outside that sidebar.
   remote exists, and it updates remote-tracking branches only — the working tree,
   the index, HEAD and your local branches are untouched. Push and pull live in a
   branch's own menu, where they are confirmed like every other writing action.
+- **Every stash is in the graph**, not just the newest one. Only the newest is
+  `refs/stash`; the older ones live in that ref's reflog, so the host names each
+  of them as a starting point of the traversal and the badge shows the position
+  it holds — `stash@{1}`. Its menu applies, pops, drops, or starts a branch from
+  that exact entry.
+- **The branch chooser** reads one branch's or tag's history instead of every
+  ref. The narrowing happens on the host, so a repository with many branches
+  does not pay for all of them.
+- **The find box** searches what is loaded — subject, author, hash and the ref
+  labels a row shows, with every term required to match. It needs no round trip,
+  says how much of the page it matched, and a search that matches nothing says
+  the history may still hold one rather than looking like an empty repository.
+- **Ctrl/Cmd-clicking a commit** marks it instead of opening it. Two marks
+  compare against each other and open a **Compare** tab: the files that differ
+  between exactly those two revisions, each opening in the same diff viewer the
+  rest of the plugin uses. One mark can be compared against the working tree,
+  which is how "what has changed since that commit" is asked. A marking survives
+  a visit to a Diff tab and is scoped to the DSH session, like the open row.
 
 The diff tab defaults to **Auto** layout: it uses Combined view below 900px and
 Split view at or above 900px. **Split** and **Combined** are explicit overrides.
@@ -131,7 +149,7 @@ name or a path that starts with `-` to git in an argument position.
   so a graph nobody is looking at costs nothing, and it debounces a burst into
   one push. If the watch cannot start, the stream says so and the browser falls
   back to refreshing when the tab comes back into view.
-- `src/client/` — the modular browser source. It registers three tab types in the
+- `src/client/` — the modular browser source. It registers four tab types in the
   right Sidebar and renders the graph, details and patches. Its imports follow an
   acyclic entry → registration → views → helpers direction, with `live.js`
   owning the push channel. `actions.js` holds the action vocabulary the menus are
@@ -182,7 +200,7 @@ HTTP server, logged-in profile or DSH restart is needed. All scenarios run
 against a temporary repository that the test creates and removes; nothing of
 yours is read or written unless you ask for it.
 
-47 checks run out of the box. Setting `GRAPH_TEST_REPO` to a repository with a
+63 checks run out of the box. Setting `GRAPH_TEST_REPO` to a repository with a
 large branching history adds 3 more that exercise real lane routing and real
 working-tree reads on that history, which is only ever read.
 

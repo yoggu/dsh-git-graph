@@ -20,6 +20,9 @@ const source = sourcePaths.map(path => moduleSource(path)).join('\n') + '\n' + m
 const cleanSource = cleanModule(sourcePaths.map(path => moduleSource(path)).join('\n'))
 const runtimeSource = cleanModule(componentPaths.map(path => moduleSource(path)).join('\n'))
   .replace('const openAccordionBySession = new Map()\nconst accordionLayoutBySession = new Map()', '')
+  // Both session-scoped memories belong to the test, so one scenario cannot
+  // leak a marking or an open accordion into the next.
+  .replace('const markersBySession = new Map()', '')
 const section = (start, end) => cleanSource.slice(cleanSource.indexOf(`function ${start}(`), cleanSource.indexOf(`function ${end}(`))
 const h = (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter(x => x != null) })
 const nodes = tree => !tree || typeof tree !== 'object' ? [] : [tree, ...[...tree.children, tree.props.first, tree.props.second].flatMap(nodes)]
@@ -48,7 +51,8 @@ class FakeEventSource {
 // The real formatter rather than a stub, so a missing snapshot time is exercised.
 const formatTime = runInNewContext(`${section('formatTime', 'sessionOf')}\nformatTime`, {})
 const openAccordionBySession = new Map()
-test.beforeEach(() => { openAccordionBySession.clear(); FakeEventSource.reset() })
+const markersBySession = new Map()
+test.beforeEach(() => { openAccordionBySession.clear(); markersBySession.clear(); FakeEventSource.reset() })
 
 function mount(name, initialProps, call = () => Promise.resolve({})) {
   const slots = [], effects = []
@@ -75,7 +79,7 @@ function mount(name, initialProps, call = () => Promise.resolve({})) {
     EMPTY_TREE: 'empty', DIFF_KIND: 'git-diff', COMPARE_KIND: 'git-compare', ACCORDION_H: 300,
     EVENTS_ROUTE: '/api/dsh-git-graph/events',
     ACCORDION_MIN_H: 180, ACCORDION_MAX_H: 720, ACCORDION_SPLIT: 50,
-    openAccordionBySession, accordionLayoutBySession: new Map(),
+    openAccordionBySession, accordionLayoutBySession: new Map(), markersBySession,
     window: { innerWidth: 1200, innerHeight: 800, addEventListener() {}, removeEventListener() {} }, navigator: {},
     document: { visibilityState: 'visible', addEventListener() {}, removeEventListener() {} },
     EventSource: FakeEventSource,
@@ -1053,4 +1057,37 @@ test('choosing a branch filter reads that branch’s history instead of every re
   assert.equal(reads.length, 3)
   assert.equal(reads[2].ref, undefined)
   ui.unmount()
+})
+
+test('a marking survives a visit to another tab, the way an open accordion does', async () => {
+  const respond = request => {
+    const other = aside(request)
+    if (other !== null) return other
+    return Promise.resolve(page(['a', 'b']))
+  }
+  const first = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo() }, respond)
+  await first.settle()
+  nodes(first.tree).find(node => node.type?.name === 'CommitRow').props.onCompare(commit('a'))
+  first.render()
+  assert.ok(find(first.tree, node => node.props.className === 'gg-compare-bar'))
+  first.unmount()
+
+  // A fresh mount of the same session — what returning from a Diff tab does —
+  // still knows which commit was marked.
+  const back = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo() }, respond)
+  await back.settle()
+  assert.ok(find(back.tree, node => node.props.className === 'gg-compare-bar'),
+    'the marking must come back with the graph')
+  const clear = nodes(find(back.tree, node => node.props.className === 'gg-compare-bar'))
+    .find(node => node.type === 'button' && node.children.join('') === 'Clear')
+  clear.props.onClick()
+  back.render()
+  assert.equal(find(back.tree, node => node.props.className === 'gg-compare-bar'), undefined)
+  back.unmount()
+
+  // …and another session never sees it.
+  const other = mount('GraphView', { sessionId: 'two', tabInfo: tabInfo() }, respond)
+  await other.settle()
+  assert.equal(find(other.tree, node => node.props.className === 'gg-compare-bar'), undefined)
+  other.unmount()
 })

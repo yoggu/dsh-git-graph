@@ -13,6 +13,17 @@ import { CompactDropdown, ContextMenu, formatTime, GitIcon } from './ui.js'
 const h = React.createElement
 
 /**
+ * The comparison a reader is assembling, per DSH session.
+ *
+ * A marking has to survive a visit to a Diff tab and come back with the graph,
+ * the way the open accordion does: the comparison is usually assembled by
+ * looking at commits, and losing it because a file was opened in between would
+ * make it unusable for the question it answers. It lives in plugin memory only,
+ * is scoped by session, and is never persisted.
+ */
+export const markersBySession = new Map()
+
+/**
  * Whether two commit lists would draw the same graph.
  *
  * This is what makes a background refresh free: the host pushes on every ref
@@ -123,7 +134,16 @@ export function GraphView({ tabInfo, sessionId }) {
   const [repo, setRepo] = React.useState(null)
   // The commits a reader has marked for comparison, oldest mark first. Two at
   // most: the first is the base, the second the side it is compared against.
-  const [markers, setMarkers] = React.useState([])
+  const [markers, setMarkersState] = React.useState(() => markersBySession.get(sessionId) ?? [])
+  const setMarkers = React.useCallback(value => {
+    setMarkersState(current => {
+      const next = typeof value === 'function' ? value(current) : value
+      if (next.length === 0) markersBySession.delete(sessionId)
+      else markersBySession.set(sessionId, next)
+      return next
+    })
+  }, [sessionId])
+  React.useEffect(() => { setMarkersState(markersBySession.get(sessionId) ?? []) }, [sessionId])
   const request = React.useRef(0)
   const noticeTimer = React.useRef(null)
   const graphRef = React.useRef(null)

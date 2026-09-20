@@ -20,9 +20,13 @@ const tabInfo = () => ({ tab: { signal: lifetime.signal, visible: tabVisible, na
 const props = () => ({ sessionId: fixtureSession, useTabInfo: tabInfo,
   useSessions: selector => selector({ byId: { [fixtureSession]: { cwd: '/test-repository' } } }) })
 function mount() {
+  // Every registered tab type is looked up by the id the plugin registered it
+  // under; a kind the harness does not know would render the wrong body and
+  // look like a plugin failure.
   const id = view === 'git-graph' ? 'dsh-git-graph'
     : view === 'git-diff' ? 'dsh-git-graph/diff'
-      : 'dsh-git-graph/commit'
+      : view === 'git-compare' ? 'dsh-git-graph/compare'
+        : 'dsh-git-graph/commit'
   const Body = seats.get(`sidebar.right.pane.tab:${id}`)
   const Title = seats.get(`sidebar.right.pane.tab.title:${id}`)
   renderRoot ||= createRoot(document.getElementById('root'))

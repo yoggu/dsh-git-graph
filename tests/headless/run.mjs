@@ -116,7 +116,11 @@ const waitDiff = async path => {
 try {
   await page.goto(origin)
   await waitGraph()
-  check('Actual client registers three tab types and Git icon', await page.locator('.fixture-title svg').count() === 1 && await page.evaluate(() => testState.registrations.length) === 3)
+  // The kinds, not the count: the bundle's promise is which tabs exist, and a
+  // count would have to be edited every time one is added.
+  check('Actual client registers the graph, commit, diff and compare tab types and Git icon',
+    await page.locator('.fixture-title svg').count() === 1
+    && await page.evaluate(() => [...testState.registrations].sort().join(',')) === 'git-commit,git-compare,git-diff,git-graph')
   check('History exposes Graph, Description, Date, Author, Commit columns', (await text('.gg-column-heading')).replace(/\n/g, ' ').includes('Graph Description Date Author Commit'))
   check('Graph header has no embedded History or Changes tabs', await page.locator('.gg-modes, .gg-mode').count() === 0)
   check('Exhausted history has no fake All commits loaded button', await page.getByText('All commits loaded', { exact: true }).count() === 0)
@@ -216,6 +220,63 @@ try {
   await page.evaluate(() => testHarness.theme('light')); await frame()
   check('Light theme keeps accordion readable', await page.locator('.gg-accordion').evaluate(e => getComputedStyle(e).backgroundColor !== 'rgba(0, 0, 0, 0)'))
   await screenshot('accordion-narrow-light.png')
+
+  // Finding a commit and narrowing to one branch: the two ways a long history
+  // is made navigable, exercised against the real host.
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.evaluate(() => testHarness.setSession('fixture', 'git-graph'))
+  await waitGraph()
+  // The uncommitted row is not a commit: it stays whatever is searched for.
+  const subjectRows = async () => (await page.locator('.gg-row .gg-subject').allInnerTexts())
+    .filter(value => !value.startsWith('Uncommitted changes'))
+  check('Every branch is shown until one is chosen', (await subjectRows()).some(value => value.includes('Topic change')))
+  await page.locator('.gg-find').fill('Topic change')
+  await frame()
+  const narrowed = await subjectRows()
+  check('The find box narrows the drawn rows', narrowed.length >= 1 && narrowed.every(value => value.includes('Topic change')))
+  check('The find box says how much of the page it matched', /of \d+ loaded commit/.test(await text('.gg-find-count')))
+  await page.locator('.gg-find').fill('nothingmatches')
+  await frame()
+  check('A search that matches nothing says so instead of looking empty', (await subjectRows()).length === 0 && (await text('.gg-empty')).includes('may still hold'))
+  await page.locator('.gg-find').fill('')
+  await frame()
+  check('Clearing the search brings every row back', (await subjectRows()).some(value => value.includes('Main change')))
+
+  await page.getByRole('button', { name: 'Branch filter' }).click()
+  await page.getByRole('option', { name: 'topic', exact: true }).click()
+  await page.waitForFunction(() => ![...document.querySelectorAll('.gg-subject')].some(node => node.textContent.includes('Main change')), null, { timeout: 8000 })
+  check('Choosing a branch reads only that branch’s history', !(await subjectRows()).some(value => value.includes('Main change')))
+  await page.getByRole('button', { name: 'Branch filter' }).click()
+  await page.getByRole('option', { name: 'All branches' }).click()
+  await page.waitForFunction(() => [...document.querySelectorAll('.gg-subject')].some(node => node.textContent.includes('Main change')), null, { timeout: 8000 })
+  check('Going back to all branches restores the whole history', (await subjectRows()).some(value => value.includes('Main change')))
+
+  // Comparing two commits: mark both, then open the comparison.
+  const before = await page.locator('.gg-row').count()
+  await page.locator('.gg-row').nth(1).click({ modifiers: ['Control'] })
+  await frame()
+  check('Marking a commit shows what is being compared', await page.locator('.gg-compare-bar').count() === 1)
+  await page.locator('.gg-row').nth(2).click({ modifiers: ['Control'] })
+  await frame()
+  check('A marked row is drawn as one side of the comparison', await page.locator('.gg-row.is-comparing').count() === 2)
+  await page.getByRole('button', { name: 'Compare', exact: true }).click()
+  await frame()
+  check('Comparing two commits opens a compare tab', await page.evaluate(() => testState.opened.at(-1).kind) === 'git-compare')
+  check('The compare tab carries both revisions', await page.evaluate(() => { const p = testState.opened.at(-1).params; return /^[0-9a-f]{40}$/.test(p.base) && /^[0-9a-f]{40}$/.test(p.head) && p.base !== p.head }))
+  // The comparison lists its files the way the rest of the plugin does.
+  await page.locator('.gg-du-file:visible').first().waitFor({ timeout: 8000 })
+  check('The comparison lists the files that differ', await page.locator('.gg-du-file:visible').count() > 0)
+  check('The comparison states which two revisions it shows', /→/.test(await text('.gg-du-summary')))
+  const comparedFile = page.locator('.gg-du-file:visible').first()
+  const comparedPath = await comparedFile.getAttribute('title')
+  await comparedFile.click(); await waitDiff(comparedPath)
+  check('A file in the comparison opens the same diff viewer', await page.evaluate(() => { const p = testState.opened.at(-1).params; return p.mode === 'commits' && p.base !== p.head && typeof p.path === 'string' }))
+  await page.evaluate(() => testHarness.setSession('fixture', 'git-graph'))
+  await waitGraph()
+  check('The comparison left the history itself untouched', await page.locator('.gg-row').count() === before)
+  await page.getByRole('button', { name: 'Clear', exact: true }).click()
+  await frame()
+  check('Clearing the comparison removes the bar', await page.locator('.gg-compare-bar').count() === 0)
 
   // The reported case, end to end: a commit lands in the repository while the
   // graph is open, and nobody touches the view.
