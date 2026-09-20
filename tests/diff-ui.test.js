@@ -1,14 +1,11 @@
-import { readFileSync, existsSync } from 'node:fs'
-import { runInNewContext } from 'node:vm'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-
-// Keep these markers when inserting the snippet into client.js. No browser needed.
-const snippet = new URL('../diff-workspace.snippet.js', import.meta.url)
-const source = readFileSync(existsSync(snippet) ? snippet : new URL('../client.js', import.meta.url), 'utf8')
-const helpers = source.split('// BEGIN DIFF UI PURE HELPERS')[1]?.split('// END DIFF UI PURE HELPERS')[0]
-assert.ok(helpers, 'Diff UI helper markers must remain in client.js after integration')
-const { parseUnifiedPatch: parse, diffFileIdentity: identity, planSplitRows, resolveDiffLayout } = runInNewContext(`${helpers}; ({ parseUnifiedPatch, diffFileIdentity, planSplitRows, resolveDiffLayout })`)
+import {
+  parseUnifiedPatch as parse,
+  diffFileIdentity as identity,
+  planSplitRows,
+  resolveDiffLayout,
+} from '../src/client/diff-layout.js'
 const own = value => JSON.parse(JSON.stringify(value))
 
 test('unified numbering, counts, omitted counts and multiple hunks', () => {

@@ -1,24 +1,8 @@
-import { readFileSync, existsSync } from 'node:fs'
-import { runInNewContext } from 'node:vm'
 import { execFileSync } from 'node:child_process'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-
-// Preserve both marker pairs when integrating; no browser or plugin boot needed.
-const snippet = new URL('../graph-layout.snippet.js', import.meta.url)
-const source = readFileSync(existsSync(snippet) ? snippet : new URL('../client.js', import.meta.url), 'utf8')
-const extract = name => {
-  const text = source.split(`// BEGIN ${name}`)[1]?.split(`// END ${name}`)[0]
-  assert.ok(text, `${name} extraction markers must remain in client.js`)
-  return text
-}
-const { layout, graphEdgePath, GraphCanvas } = runInNewContext(`
-  const ROW_H=26, LANE_W=14, LANE_X0=12, DOT_R=4;
-  const laneColor = slot => 'color-' + slot;
-  const h = (tag, props, ...children) => ({tag, props, children});
-  ${extract('GRAPH LAYOUT')}
-  ${extract('GRAPH CANVAS')}
-  ;({layout, graphEdgePath, GraphCanvas})`)
+import { layout, graphEdgePath } from '../src/client/graph-layout.js'
+import { GraphCanvas } from '../src/client/graph-ui.js'
 const own = value => JSON.parse(JSON.stringify(value))
 const commits = (...records) => records.map(([hash, ...parents]) => ({ hash, parents }))
 const edgeFor = (graph, child, parent) => graph.edges.find(edge => graph.rows[edge.from.row].commit.hash === child && edge.parent === parent)
@@ -160,10 +144,11 @@ test('canvas paths and dots stay within the reserved graph width', () => {
   const canvas = GraphCanvas({ ...graph, height: graph.rows.length * 26 })
   assert.equal(canvas.props.width, 52)
   assert.equal(canvas.props.viewBox, '0 0 52 104')
-  assert.equal(canvas.children[0].length, graph.edges.length)
-  assert.equal(canvas.children[1].length, graph.rows.length)
-  for (const path of canvas.children[0]) assert.equal(path.props.strokeLinecap, 'round')
-  for (const dot of canvas.children[1]) assert.ok(dot.props.cx + dot.props.r < canvas.props.width)
+  const [paths, dots] = canvas.props.children
+  assert.equal(paths.length, graph.edges.length)
+  assert.equal(dots.length, graph.rows.length)
+  for (const path of paths) assert.equal(path.props.strokeLinecap, 'round')
+  for (const dot of dots) assert.ok(dot.props.cx + dot.props.r < canvas.props.width)
 })
 
 test('empty graph is safe', () => {

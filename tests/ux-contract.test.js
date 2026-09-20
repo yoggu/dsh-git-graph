@@ -1,7 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { runInNewContext } from 'node:vm'
+import {
+  parseUnifiedPatch,
+  resolveDiffLayout,
+} from '../src/client/diff-layout.js'
 import {
   STATUS_CONTRACT,
   statusContract,
@@ -15,11 +18,10 @@ import {
   DIFF_LAYOUT_OPTIONS,
 } from './ux-fixtures.js'
 
-const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
-const appSource = source.split('// END BUNDLED SYNTAX')[1] ?? source
-const pure = source.split('// BEGIN DIFF UI PURE HELPERS')[1]?.split('// END DIFF UI PURE HELPERS')[0]
-assert.ok(pure, 'integrated client must retain the pure diff helper boundary')
-const helpers = runInNewContext(`${pure}; ({ parseUnifiedPatch, diffFileIdentity, resolveDiffLayout })`)
+const modulePaths = ['constants.js', 'graph-view.js', 'graph-ui.js', 'accordions.js', 'views.js', 'diff-view.js', 'files.js', 'ui.js', 'tabs.js', 'registration.js', 'styles.js']
+const source = modulePaths.map(path => readFileSync(new URL(`../src/client/${path}`, import.meta.url), 'utf8')).join('\n')
+const appSource = source
+const helpers = { parseUnifiedPatch, resolveDiffLayout }
 const own = value => JSON.parse(JSON.stringify(value))
 
 const sourceHas = pattern => pattern.test(source)

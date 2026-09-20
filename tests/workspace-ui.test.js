@@ -2,12 +2,23 @@ import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import * as GitSyntax from '../scripts/syntax-entry.js'
+import * as GitSyntax from '../src/client/syntax.js'
+import { diffFileIdentity, parseUnifiedPatch, planSplitRows, resolveDiffLayout } from '../src/client/diff-layout.js'
 
-// Execute the integrated source, not a possibly stale design snippet. React is
-// not installed here; this minimal hook runner tests state/effect transitions.
-const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
-const section = (start, end) => source.slice(source.indexOf(`    function ${start}(`), source.indexOf(`    function ${end}(`))
+// Execute the modular source with a minimal hook runner. Pure helpers are
+// imported normally; component source is evaluated only to substitute React.
+const componentPaths = ['ui.js', 'graph-ui.js', 'diff-view.js', 'files.js', 'accordions.js', 'graph-view.js', 'views.js']
+const sourcePaths = [...componentPaths, 'tabs.js']
+const moduleSource = path => readFileSync(new URL(`../src/client/${path}`, import.meta.url), 'utf8')
+const cleanModule = text => text
+  .replace(/^import .*$/gm, '')
+  .replace(/^const h = React\.createElement$/gm, '')
+  .replace(/^export /gm, '')
+const source = sourcePaths.map(path => moduleSource(path)).join('\n') + '\n' + moduleSource('styles.js')
+const cleanSource = cleanModule(sourcePaths.map(path => moduleSource(path)).join('\n'))
+const runtimeSource = cleanModule(componentPaths.map(path => moduleSource(path)).join('\n'))
+  .replace('const openAccordionBySession = new Map()\nconst accordionLayoutBySession = new Map()', '')
+const section = (start, end) => cleanSource.slice(cleanSource.indexOf(`function ${start}(`), cleanSource.indexOf(`function ${end}(`))
 const h = (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter(x => x != null) })
 const nodes = tree => !tree || typeof tree !== 'object' ? [] : [tree, ...[...tree.children, tree.props.first, tree.props.second].flatMap(nodes)]
 const find = (tree, predicate) => nodes(tree).find(predicate)
@@ -35,17 +46,18 @@ function mount(name, initialProps, call = () => Promise.resolve({})) {
   }
   const context = {
     React, h, call, GitSyntax, AbortController, setTimeout, clearTimeout,
-    layout: commits => ({ rows: commits.map(commit => ({ commit })), edges: [], columnCount: 1 }),
-    ROW_H: 26, LANE_X0: 12, LANE_W: 12, EMPTY_TREE: 'empty', ACCORDION_H: 300,
-    GraphCanvas() {}, CommitRow() {}, GitIcon() {}, FileIcon() {}, CommitAccordion() {}, WorkingAccordion() {},
-    openAccordionBySession,
-    copyText() {}, formatDate: x => x, formatTime,
-    window: { innerWidth: 1200, innerHeight: 800 },
+    parseUnifiedPatch, planSplitRows, resolveDiffLayout, diffFileIdentity,
+    layout: commits => ({ rows: commits.map((commit, row) => ({ commit, row, column: 0, slot: 0 })), edges: [], columnCount: 1 }),
+    graphEdgePath: () => '',
+    ROW_H: 26, LANE_X0: 12, LANE_W: 12, DOT_R: 4, LANE_COLORS: ['blue'],
+    EMPTY_TREE: 'empty', DIFF_KIND: 'git-diff', ACCORDION_H: 300,
+    ACCORDION_MIN_H: 180, ACCORDION_MAX_H: 720, ACCORDION_SPLIT: 50,
+    openAccordionBySession, accordionLayoutBySession: new Map(),
+    window: { innerWidth: 1200, innerHeight: 800 }, navigator: {},
     document: { addEventListener() {}, removeEventListener() {} },
     ResizeObserver: class { observe() {} disconnect() {} },
   }
-  const components = section('SplitPane', 'GitIcon').replace('    const openAccordionBySession = new Map()\n', '')
-  const component = runInNewContext(`${components}\n${section('ContextMenu', 'copyText')}\n${name}`, context)
+  const component = runInNewContext(`${runtimeSource}\n${name}`, context)
   const render = () => {
     let budget = 30
     do { assert.ok(budget--, 'render must converge'); dirty = false; index = 0; tree = component(props); effects.splice(0).forEach(fn => fn()) } while (dirty)
@@ -127,7 +139,8 @@ test('the Git graph guide capsule carries the tab’s branch glyph', () => {
     "const DIFF_ID = 'diff', DIFF_KIND = 'diff'",
     "const CHANGES_ID = 'changes', CHANGES_KIND = 'changes'",
   ].join('\n')
-  const slice = source.slice(source.indexOf('    const definitions = ['), source.indexOf('    /** Styles, built once and removed with the plugin. */'))
+  const tabSource = cleanModule(moduleSource('tabs.js'))
+  const slice = tabSource.slice(tabSource.indexOf('const definitions = ['))
   const definitions = runInNewContext(`${constants}\n${slice}\ndefinitions`, { GuideGlyph: glyph })
   const [entry] = definitions[0].guide
   assert.equal(entry.title(), 'Git graph')

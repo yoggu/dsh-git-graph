@@ -2,14 +2,21 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
-import { languageForPath, tokenize, highlightRows } from '../scripts/syntax-entry.js'
+import { languageForPath, tokenize, highlightRows } from '../src/client/syntax.js'
 
-test('shipped client contains a working self-contained syntax bundle', () => {
+test('shipped client is a self-contained DSH artifact with only React external', () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
-  const bundled = source.split('// BEGIN BUNDLED SYNTAX\n')[1].split('// END BUNDLED SYNTAX')[0]
-  const syntax = runInNewContext(`${bundled}\nGitSyntax`)
-  assert.equal(syntax.languageForPath('x.py'), 'python')
-  assert.ok(syntax.tokenize('return 42', 'python')[0].some(token => token.classes.includes('keyword')))
+  let registration
+  runInNewContext(source, { window: { __ModuleLoader__: { load(value) { registration = value } } }, console })
+  assert.equal(registration.id, 'dsh-git-graph')
+  const plugin = registration.factory(name => {
+    assert.equal(name, 'react')
+    return {}
+  })
+  assert.deepEqual([...plugin.inject], ['slots', 'sidebarRightTabs'])
+  assert.equal(typeof plugin.apply, 'function')
+  assert.doesNotMatch(source, /require\(["']highlight\.js/)
+  assert.match(source, /dockerfile/)
 })
 
 test('recognizes project languages and leaves unknown formats plain', () => {

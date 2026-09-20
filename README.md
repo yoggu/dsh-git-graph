@@ -52,10 +52,10 @@ can limit multi-line classification. Unknown formats and patches above 200 KB or
 5,000 rows stay plain for responsiveness. All code tokens are rendered as escaped
 React text, never inserted as repository HTML.
 
-To change grammars or tokenization: edit `scripts/syntax-entry.js`, then run
-`npm ci && npm run build:syntax`. The build replaces only the marked generated
-block in `client.js`, preserving its hand-edited plugin code. License notices are
-in `THIRD_PARTY_NOTICES.md`.
+To change grammars or tokenization, edit `src/client/syntax.js`, then run
+`npm run build`. The tsdown build bundles all client modules and highlight.js into
+`client.js`; React stays external because DSH supplies it. License notices are in
+`THIRD_PARTY_NOTICES.md`.
 
 UX research: independently implemented patterns informed by the public
 [VS Code Git Graph documentation](https://github.com/mhutchie/vscode-git-graph/blob/develop/README.md),
@@ -78,9 +78,11 @@ it deliberately offers no mutating Git action.
   opened in a subdirectory still finds its repository) and serves one exact
   route, `/api/dsh-git-graph`. A request that names no live session is refused
   rather than answered from another project.
-- `client.js` — the browser half. It registers four tab types in the right
-  Sidebar and renders the graph, the details, the patches and the working tree.
-  It runs no git itself.
+- `src/client/` — the modular browser source. It registers four tab types in the
+  right Sidebar and renders the graph, details, patches and working tree. Its
+  imports follow an acyclic entry → registration → views → helpers direction.
+- `client.js` — the generated, self-contained DSH browser wrapper. It keeps React
+  external and runs no git itself.
 
 ## Install
 
@@ -88,11 +90,13 @@ it deliberately offers no mutating Git action.
 dsh plugin --profile web add link:/home/yoggu/Projects/dsh-plugins/dsh-git-graph
 ```
 
-First install needs one restart of the web service. After that, **editing
-`client.js` needs no restart**: `dsh-client-hmr` stat-polls every client bundle
-every 500 ms and re-hashes the ones whose size or mtime changed, so a saved file
-reaches the page on the next load. Editing `lib/index.js` — the host half — does
-need a restart, because host rows are composed at startup.
+First install needs one restart of the web service. After that, edit `src/client/`
+and run `npm run build`, or keep `npm run watch` running while developing;
+**updating generated `client.js` needs no restart**. `dsh-client-hmr` stat-polls
+every client bundle every 500 ms and re-hashes the
+ones whose size or mtime changed, so a built file reaches the page on the next
+load. Editing `lib/index.js` — the host half — does need a restart, because host
+rows are composed at startup.
 
 Then, in the right Sidebar, open the guide and pick **Git graph**.
 
@@ -122,7 +126,7 @@ HTTP server, logged-in profile or DSH restart is needed. All scenarios run
 against a temporary repository that the test creates and removes; nothing of
 yours is read or written unless you ask for it.
 
-25 checks run out of the box. Setting `GRAPH_TEST_REPO` to a repository with a
+35 checks run out of the box. Setting `GRAPH_TEST_REPO` to a repository with a
 large branching history adds 8 more that exercise real lane routing, pagination
 and merge details on that history, which is only ever read.
 
@@ -144,8 +148,9 @@ Two traps worth knowing, both of which cost real time to find:
   the *string* `'ContextMenu'`; React then looks for an HTML element by that
   name, finds none, and renders nothing — silently, with no console error and no
   exception. Always `h(ContextMenu, {...})`.
-- **A stale bundle looks exactly like a broken fix.** After editing `client.js`,
-  confirm the running page actually has the change before debugging further. The
+- **A stale bundle looks exactly like a broken fix.** After editing `src/client/`,
+  run `npm run build` (or `npm run check:build` to detect drift), then confirm the
+  running page actually has the change before debugging further. The
   reliable check reads the loaded bundle:
 
   ```js

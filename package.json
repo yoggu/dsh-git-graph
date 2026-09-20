@@ -30,9 +30,11 @@
     }
   },
   "scripts": {
-    "test": "node --test \"tests/*.test.js\"",
-    "build:syntax": "node scripts/build-syntax.js",
-    "test:browser": "node tests/headless/run.mjs"
+    "build": "tsdown",
+    "watch": "tsdown --watch",
+    "check:build": "node scripts/check-client-build.js",
+    "test": "node --test \"tests/*.test.js\" && npm run check:build",
+    "test:browser": "npm run check:build && node tests/headless/run.mjs"
   },
   "engines": {
     "node": ">=22.19.0"
@@ -45,6 +47,7 @@
     "playwright-core": "1.58.2",
     "pngjs": "7.0.0",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "tsdown": "^0.22.2"
   }
 }
