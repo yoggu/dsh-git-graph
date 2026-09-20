@@ -5,6 +5,18 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { internals } from '../lib/index.js'
+import {
+  commitActions, fileActions, operationActions, paramsFor,
+  refActions, stashActions, workingActions,
+} from '../src/client/actions.js'
+
+/** Values for a request's fields that would pass its own validation. */
+function filledValues(entry) {
+  return Object.fromEntries((entry.fields ?? []).map(field => [field.name,
+    field.type === 'checkbox' ? field.initial === true
+      : field.type === 'select' ? (field.initial ?? field.options[0].value)
+        : field.name === 'to' ? 'renamed' : 'probe']))
+}
 
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
 
@@ -513,6 +525,56 @@ test('a file git does not track is deleted rather than restored', async () => {
     // And the restore path still refuses a path outside the repository.
     await assert.rejects(() => planOf(root, 'working.clean', { paths: ['../escape'] }), /inside the repository/)
     await assert.rejects(() => planOf(root, 'working.remove', { paths: [] }), /file paths is required/)
+  } finally {
+    cleanup()
+  }
+})
+
+test('every action a menu can offer is one the host can plan', async () => {
+  const { root, cleanup } = fixture()
+  try {
+    git(root, 'remote', 'add', 'origin', 'https://example.invalid/repo.git')
+    const hash = git(root, 'rev-parse', 'HEAD')
+    const ctx = { branch: 'main', remotes: ['origin'] }
+    // Every subject a menu is built for, so a leaf action with a typo — or one
+    // whose parameters the host would refuse — fails here rather than in a
+    // dialog in front of a reader.
+    const offered = [
+      ...commitActions({ hash, subject: 'x' }, ctx),
+      ...refActions({ kind: 'head', label: 'main' }, ctx),
+      ...refActions({ kind: 'branch', label: 'feature' }, ctx),
+      ...refActions({ kind: 'remote', label: 'main', remote: 'origin' }, ctx),
+      ...refActions({ kind: 'tag', label: 'v1' }, ctx),
+      ...stashActions({ kind: 'stash', label: 'stash@{0}', index: 0 }),
+      ...workingActions(),
+      ...fileActions({ path: 'a.txt', status: 'M', group: 'unstaged' }),
+      ...fileActions({ path: 'a.txt', status: 'M', group: 'staged' }),
+      // A staged *addition* is the one file state whose discard is a removal.
+      ...fileActions({ path: 'added.txt', status: 'A', group: 'staged' }),
+      ...fileActions({ path: 'loose.txt', status: '?', group: 'untracked' }),
+      ...operationActions({ operation: 'merge' }),
+      ...operationActions({ operation: 'rebase' }),
+      ...operationActions({ operation: 'cherryPick' }),
+      ...operationActions({ operation: 'revert' }),
+    ]
+    assert.ok(offered.length >= 30, `expected a full vocabulary, got ${offered.length}`)
+    for (const entry of offered) {
+      const params = paramsFor(entry, filledValues(entry))
+      await planOf(root, entry.action, params)
+    }
+    // And the list names the actions the objective promised, so a menu that
+    // stopped offering one of them is caught rather than merely not planned.
+    const ids = new Set(offered.map(entry => entry.action))
+    for (const required of [
+      'branch.create', 'branch.checkout', 'branch.delete', 'branch.rename', 'branch.merge',
+      'branch.rebase', 'branch.reset', 'branch.pull', 'branch.push', 'branch.fetchIntoLocal',
+      'tag.add', 'tag.delete', 'tag.push',
+      'commit.checkout', 'commit.cherryPick', 'commit.revert', 'commit.reset',
+      'working.stash', 'working.clean', 'working.discard', 'working.remove', 'working.reset',
+      'stash.apply', 'stash.pop', 'stash.drop', 'stash.branch',
+    ]) {
+      assert.ok(ids.has(required), `${required} must be reachable from a menu`)
+    }
   } finally {
     cleanup()
   }

@@ -687,8 +687,14 @@ test('the current branch offers push and pull; another branch offers checkout, m
   assert.deepEqual(current, ['branch.push', 'branch.pull'])
 
   const other = refActions({ kind: 'branch', label: 'feature' }, ctx).map(entry => entry.action)
-  assert.deepEqual(other, ['branch.checkout', 'branch.merge', 'branch.rebase', 'branch.rename', 'branch.delete'])
-  assert.ok(!other.includes('branch.delete') === false)
+  assert.deepEqual(other, ['branch.checkout', 'branch.merge', 'branch.rebase', 'branch.reset', 'branch.rename', 'branch.delete'])
+
+  // A remote-tracking branch can be the target of a reset too, which is the one
+  // way "throw my local commits away and take the remote's" is reachable.
+  const remote = refActions({ kind: 'remote', label: 'main', remote: 'origin' }, ctx)
+  const reset = remote.find(entry => entry.action === 'branch.reset')
+  assert.deepEqual({ ...reset.params }, { to: 'origin/main' })
+  assert.equal(reset.danger, true)
 
   // Without a remote there is nothing to push to, so those entries are absent
   // rather than offered and then refused.

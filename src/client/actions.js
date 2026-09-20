@@ -199,6 +199,15 @@ export function refActions(ref, ctx) {
         params: { onto: ref.label },
       })
       entries.push({
+        action: 'branch.reset',
+        label: `Reset ${branch} to ${ref.label}…`,
+        title: `Reset ${branch} to ${ref.label}`,
+        note: 'Moves this branch onto the other, whatever it does to the commits in between.',
+        danger: true,
+        params: { to: ref.label },
+        fields: [{ name: 'mode', label: 'Mode', type: 'select', initial: 'mixed', options: RESET_OPTIONS }],
+      })
+      entries.push({
         action: 'branch.rename',
         label: 'Rename…',
         title: `Rename ${ref.label}`,
@@ -257,6 +266,15 @@ export function refActions(ref, ctx) {
       title: `Merge ${full} into ${branch}`,
       params: { name: full },
       fields: [{ name: 'noFastForward', label: 'Always make a merge commit (--no-ff)', type: 'checkbox' }],
+    })
+    entries.push({
+      action: 'branch.reset',
+      label: `Reset ${branch} to ${full}…`,
+      title: `Reset ${branch} to ${full}`,
+      note: 'Moves this branch onto the remote-tracking commit, whatever it does to the commits in between.',
+      danger: true,
+      params: { to: full },
+      fields: [{ name: 'mode', label: 'Mode', type: 'select', initial: 'mixed', options: RESET_OPTIONS }],
     })
     entries.push({
       action: 'branch.fetchIntoLocal',
