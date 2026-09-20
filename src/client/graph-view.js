@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { commitActions, describeBadge, operationActions, refActions, workingActions } from './actions.js'
+import { commitActions, describeBadge, operationActions, refActions, stashActions, workingActions } from './actions.js'
 import { call } from './api.js'
 import { ACCORDION_H, ACCORDION_MAX_H, ACCORDION_MIN_H, ACCORDION_SPLIT, LANE_W, LANE_X0, ROW_H } from './constants.js'
 import { ActionDialog, operationLabel } from './dialog.js'
@@ -171,7 +171,7 @@ export function GraphView({ tabInfo, sessionId }) {
         // Nothing the graph draws has changed. Keep the rendered rows — and with
         // them the reader's scroll position and open accordion — by leaving the
         // commit list identity alone.
-        setState(current => ({ ...current, refs: result.refs ?? current.refs, exhausted: result.exhausted, nextSkip: result.nextSkip }))
+        setState(current => ({ ...current, refs: result.refs ?? current.refs, stashes: result.stashes ?? current.stashes, exhausted: result.exhausted, nextSkip: result.nextSkip }))
         if (announce) flash('Up to date')
         return
       }
@@ -253,13 +253,13 @@ export function GraphView({ tabInfo, sessionId }) {
   const toggle = commit => selectAccordion(current => current === commit.hash ? null : commit.hash)
   const laneWidth = Math.max(100, LANE_X0 * 2 + graph.columnCount * LANE_W)
   const rows = graph.rows.map((row, index) => h('div', { key: row.commit.hash, className: 'gg-row-stack' },
-    h(CommitRow, { row, indent: laneWidth, dense: false, remotes: state.refs?.remotes ?? [], selected: selected === row.commit.hash,
+    h(CommitRow, { row, indent: laneWidth, dense: false, remotes: state.refs?.remotes ?? [], stashes: state.stashes ?? [], selected: selected === row.commit.hash,
       onSelect: toggle, onCompare: toggle,
       onContextMenu: (event, commit) => setMenu({ x: event.clientX, y: event.clientY, commit }),
       onRefContextMenu: (event, badge) => {
         // A detached-HEAD badge names no ref, so it offers no ref actions and
         // the row's own menu stays closed rather than opening an empty one.
-        const ref = describeBadge(badge, state.refs?.refs ?? [])
+        const ref = describeBadge(badge, state.refs?.refs ?? [], state.stashes ?? [])
         if (ref !== null) setMenu({ x: event.clientX, y: event.clientY, ref })
       } }),
     selected === row.commit.hash ? (row.commit.synthetic ? h(WorkingAccordion, { files: working.files, sessionId, signal, tabInfo, onChanged: loadWorking, height: accordionHeight, split: accordionSplit, onHeightChange: setAccordionHeight, onSplitChange: setAccordionSplit }) : h(CommitAccordion, { hash: row.commit.hash, sessionId, signal, revision, tabInfo, onSelect: selectAccordion, height: accordionHeight, split: accordionSplit, onHeightChange: setAccordionHeight, onSplitChange: setAccordionSplit })) : null))
@@ -272,6 +272,7 @@ export function GraphView({ tabInfo, sessionId }) {
   const menuActions = React.useMemo(() => {
     if (menu === null) return []
     const context = { branch: repo?.branch ?? null, remotes: state.refs?.remotes ?? [] }
+    if (menu.ref?.kind === 'stash') return stashActions(menu.ref)
     if (menu.ref !== undefined) return refActions(menu.ref, context)
     if (menu.commit === undefined) return []
     if (menu.commit.synthetic === true) return workingActions()

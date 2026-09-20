@@ -316,3 +316,35 @@ test('the state, plan and action operations answer end to end through dispatch',
     cleanup()
   }
 })
+
+test('every stash is in the history and named by its position', async () => {
+  const { root, cleanup } = fixture()
+  try {
+    writeFileSync(join(root, 'a.txt'), 'two\n')
+    git(root, 'stash', 'push', '-m', 'erste')
+    writeFileSync(join(root, 'a.txt'), 'three\n')
+    git(root, 'stash', 'push')
+
+    const stashes = await internals.listStashes(root)
+    assert.deepEqual(stashes.map(entry => entry.index), [0, 1])
+    assert.deepEqual(stashes.map(entry => entry.selector), ['stash@{0}', 'stash@{1}'])
+    assert.equal(stashes.map(entry => entry.fullSelector)[1], 'refs/stash@{1}')
+    assert.match(stashes[0].subject, /WIP on main/)
+    assert.match(stashes[1].subject, /erste/)
+    assert.match(stashes[0].date, /^\d{4}-\d{2}-\d{2}T/)
+
+    // `--all` reaches only the newest stash, because the older ones live in
+    // that ref's reflog; naming every stash as a starting point is what puts
+    // them in the graph at all.
+    const page = await internals.listCommits(root, { limit: 50, skip: 0, stashes })
+    const hashes = page.map(commit => commit.hash)
+    for (const stash of stashes) assert.ok(hashes.includes(stash.hash), `${stash.selector} must be in the history`)
+    const withoutStashes = await internals.listCommits(root, { limit: 50, skip: 0 })
+    assert.ok(!withoutStashes.map(commit => commit.hash).includes(stashes[1].hash))
+
+    // A repository with no stash reports none rather than failing.
+    assert.deepEqual(await internals.listStashes(join(root, 'nonexistent')), [])
+  } finally {
+    cleanup()
+  }
+})

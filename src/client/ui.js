@@ -225,11 +225,15 @@ export function ContextMenu({ menu, actions = [], onAction, markers, onClose, on
   }
   if (target !== undefined) {
     // A ref is worth copying under the name a command would take: the short
-    // name for a reader, the full path for a script.
+    // name for a reader, the full path for a script. A stash has no name of its
+    // own, so it is copied by the selector that identifies it.
+    const noun = target.kind === 'tag' ? 'tag' : target.kind === 'stash' ? 'stash selector' : 'branch'
     reading.push(
-      { label: `Copy ${target.kind === 'tag' ? 'tag' : 'branch'} name`, run: () => { copyText(target.label); onFlash('Name copied') } },
-      { label: 'Copy full ref name', run: () => { copyText(target.path); onFlash('Ref copied') } },
+      { label: `Copy ${noun}`, run: () => { copyText(target.label); onFlash('Name copied') } },
     )
+    if (target.kind !== 'stash') {
+      reading.push({ label: 'Copy full ref name', run: () => { copyText(target.path); onFlash('Ref copied') } })
+    }
     if (typeof target.target === 'string' && onOpenCommit !== undefined) {
       reading.push({ label: 'Show the commit it points at', run: () => onOpenCommit({ hash: target.target }) })
     }

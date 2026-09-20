@@ -805,3 +805,47 @@ test('a file in the working tree offers to discard its changes', async () => {
   assert.equal(source.initial, 'index')
   ui.unmount()
 })
+
+test('a stash badge offers apply, pop, branch and drop, each naming its position', async () => {
+  const stashHash = 'b'.repeat(40)
+  const ui = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo() }, request => {
+    const other = aside(request)
+    if (other !== null) return other
+    if (request.op === 'plan') {
+      return Promise.resolve({ plan: { summary: 'git stash pop stash@{1}' }, state: idleState, warnings: [], blocked: null })
+    }
+    return Promise.resolve({
+      ...page(['a']),
+      commits: [
+        { hash: stashHash, parents: [], subject: 'WIP on main: base', authorName: 'A', authorDate: '2024-01-01T00:00:00Z', refs: ['refs/stash'] },
+        commit('a'),
+      ],
+      stashes: [{ index: 1, hash: stashHash, selector: 'stash@{1}', subject: 'On main: erste', date: '2024-01-01T00:00:00.000Z' }],
+    })
+  })
+  await ui.settle()
+
+  const row = nodes(ui.tree).find(node => node.type?.name === 'CommitRow' && node.props.row.commit.hash === stashHash)
+  assert.ok(row, 'the stash commit is a row of the graph')
+  row.props.onRefContextMenu({ clientX: 1, clientY: 1 }, {
+    kind: 'stash', label: 'stash@{1}', text: 'stash@{1}', remote: null, remotes: [],
+  })
+  ui.render()
+
+  const menu = nodes(ui.tree).find(node => node.type?.name === 'ContextMenu')
+  assert.ok(menu, 'the stash badge opens a menu')
+  assert.deepEqual([...menu.props.actions].map(entry => entry.action),
+    ['stash.apply', 'stash.pop', 'stash.branch', 'stash.drop'])
+  // Every entry names the position it acts on, which is the whole point: two
+  // stashes differ by nothing else.
+  assert.deepEqual([...menu.props.actions].map(entry => /stash@\{1\}/.test(entry.label)), [true, true, true, true])
+  assert.equal([...menu.props.actions][3].danger, true, 'dropping one is destructive')
+
+  menu.props.onAction([...menu.props.actions][1])
+  await ui.settle()
+  const dialog = nodes(ui.tree).find(node => node.type?.name === 'ActionDialog')
+  assert.ok(dialog, 'popping opens the confirmation dialog')
+  assert.equal(dialog.props.request.action, 'stash.pop')
+  assert.deepEqual(JSON.parse(JSON.stringify(dialog.props.request.params)), { index: 1 })
+  ui.unmount()
+})

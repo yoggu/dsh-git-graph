@@ -30,6 +30,10 @@ export function parseRef(ref, remotes) {
   if (name === 'HEAD') return { label: 'HEAD', kind: 'detached', prefix: null, remote: null }
   if (isHead) return { label: name, kind: 'head', prefix: 'HEAD', remote: null }
   if (name.startsWith('tag: ')) return { label: name.slice(5), kind: 'tag', prefix: null, remote: null }
+  // A stash is not a branch: `refs/stash` is the newest one and it is spelled
+  // with a full ref path, which would otherwise be read as a branch of that
+  // name. The position the row's badge shows comes from the stash list.
+  if (name === 'refs/stash') return { label: 'stash', kind: 'stash', prefix: null, remote: null }
   // A remote-tracking name is `<remote>/<branch>`, and the remote names are
   // known, so the split is made against them rather than at the first slash:
   // `origin/feature/x` is remote `origin`, branch `feature/x`, not remote
@@ -61,10 +65,14 @@ export function parseRef(ref, remotes) {
  * @param refs - the row's decoration tokens.
  * @param remotes - the configured remote names, which decide where a
  *   remote-tracking name stops being a remote and starts being a branch.
- * @returns one entry per distinct branch, tag or detached HEAD.
+ * @param options - the row's commit id, and the stashes, so a stash badge can
+ *   be named by the position it holds in the stash list rather than by the one
+ *   ref name every stash shares.
+ * @returns one entry per distinct branch, tag, stash or detached HEAD.
  */
-export function groupRefs(refs, remotes) {
-  const priority = { head: 0, branch: 1, remote: 2, tag: 3, detached: 4 }
+export function groupRefs(refs, remotes, options = {}) {
+  const priority = { head: 0, branch: 1, remote: 2, tag: 3, stash: 4, detached: 5 }
+  const stashes = options.stashes ?? []
   const parsed = refs.map(ref => parseRef(ref, remotes))
   const entries = []
   // Local branches, indexed by the name a remote-tracking branch would carry.
@@ -87,6 +95,20 @@ export function groupRefs(refs, remotes) {
   for (const ref of parsed) {
     if (ref.kind === 'tag') { entries.push(simple(ref, `tag ${ref.label}`)); continue }
     if (ref.kind === 'detached') { entries.push(simple(ref, ref.label)); continue }
+    if (ref.kind === 'stash') {
+      const entry = stashes.find(item => item.hash === options.hash)
+      const label = entry === undefined ? ref.label : `stash@{${entry.index}}`
+      entries.push({
+        key: `stash:${label}`,
+        kind: 'stash',
+        text: label,
+        label,
+        remote: null,
+        title: entry?.subject ?? 'stash',
+        remotes: [],
+      })
+      continue
+    }
     if (ref.kind !== 'remote') continue
     const text = `${ref.remote}/${ref.label}`
     const host = local.get(ref.label)
@@ -202,7 +224,7 @@ export function GraphCanvas({ rows, edges, columnCount, height, expandedRow = -1
  * @param props - the row, the indent, the selection state, and the actions.
  * @returns the row element.
  */
-export function CommitRow({ row, indent, dense, remotes, selected, comparing, onSelect, onCompare, onContextMenu, onRefContextMenu }) {
+export function CommitRow({ row, indent, dense, remotes, stashes, selected, comparing, onSelect, onCompare, onContextMenu, onRefContextMenu }) {
   const commit = row.commit
   const when = new Date(commit.authorDate)
   const stamp = Number.isNaN(when.getTime())
@@ -211,7 +233,7 @@ export function CommitRow({ row, indent, dense, remotes, selected, comparing, on
       year: '2-digit', month: '2-digit', day: '2-digit',
       hour: '2-digit', minute: '2-digit',
     })
-  const grouped = groupRefs(commit.refs, remotes)
+  const grouped = groupRefs(commit.refs, remotes, { hash: commit.hash, stashes })
   return h('div', {
     className: `gg-row${selected ? ' is-selected' : ''}${comparing ? ' is-comparing' : ''}`,
     role: 'button',

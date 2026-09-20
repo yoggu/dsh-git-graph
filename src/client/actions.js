@@ -59,15 +59,30 @@ const remoteField = remotes => ({
  * A badge carries only what the row's decoration said: a short name, a kind,
  * and for a remote-tracking branch the remote it belongs to. The full ref name
  * — what a command would take — and the commit it points at come from the refs
- * list the same request returned.
+ * list the same request returned. A stash is resolved against the stash list
+ * instead, because its identity is the position it holds, not a ref name.
  *
  * @param badge - the grouped badge from the row.
  * @param refs - the host's full ref entries.
+ * @param stashes - the host's stash entries.
  * @returns the ref descriptor, or `null` for a badge that names no ref.
  */
-export function describeBadge(badge, refs = []) {
+export function describeBadge(badge, refs = [], stashes = []) {
   if (badge === null || badge === undefined) return null
   if (badge.kind === 'detached') return null
+  if (badge.kind === 'stash') {
+    const found = stashes.find(entry => `stash@{${entry.index}}` === badge.label)
+    return {
+      kind: 'stash',
+      label: badge.label,
+      remote: null,
+      full: badge.label,
+      path: found?.selector ?? badge.label,
+      target: found?.hash ?? null,
+      index: found?.index ?? null,
+      subject: found?.subject ?? null,
+    }
+  }
   const wanted = badge.kind === 'remote'
     ? `refs/remotes/${badge.remote}/${badge.label}`
     : badge.kind === 'tag' ? `refs/tags/${badge.label}` : `refs/heads/${badge.label}`
@@ -274,6 +289,53 @@ export function refActions(ref, ctx) {
   }
 
   return entries
+}
+
+/**
+ * The actions one stash offers.
+ *
+ * A stash is the one subject whose actions are all about its position: applying
+ * the wrong entry is the mistake this menu exists to prevent, so every label
+ * carries the selector the action will use.
+ *
+ * @param stash - the stash descriptor, whose index is its position.
+ * @returns the menu entries, or none when the position is unknown.
+ */
+export function stashActions(stash) {
+  if (stash === null || stash === undefined || !Number.isInteger(stash.index)) return []
+  const at = stash.label ?? `stash@{${stash.index}}`
+  return [
+    {
+      action: 'stash.apply',
+      label: `Apply ${at}`,
+      title: `Apply ${at}`,
+      note: 'Leaves the stash in the list.',
+      params: { index: stash.index },
+      fields: [{ name: 'reinstateIndex', label: 'Restore what was staged (--index)', type: 'checkbox' }],
+    },
+    {
+      action: 'stash.pop',
+      label: `Pop ${at}`,
+      title: `Pop ${at}`,
+      note: 'Applies it and removes it from the list.',
+      params: { index: stash.index },
+    },
+    {
+      action: 'stash.branch',
+      label: `Start a branch from ${at}…`,
+      title: `Start a branch from ${at}`,
+      note: 'Checks out a new branch at the commit the stash was made on, then applies it.',
+      params: { index: stash.index },
+      fields: [{ name: 'name', label: 'Branch name', required: true, placeholder: 'recover/x' }],
+    },
+    {
+      action: 'stash.drop',
+      label: `Drop ${at}`,
+      title: `Drop ${at}`,
+      danger: true,
+      params: { index: stash.index },
+    },
+  ]
 }
 
 /**

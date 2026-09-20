@@ -113,3 +113,29 @@ test('a row without refs renders nothing', () => {
   assert.equal(RefBadges({ refs: [] }), null)
   assert.deepEqual(own(labels([])), [])
 })
+
+test('a stash is named by its position, not by the one ref every stash shares', () => {
+  const stashes = [
+    { index: 0, hash: 'a'.repeat(40), selector: 'stash@{0}', subject: 'WIP on main: base' },
+    { index: 1, hash: 'b'.repeat(40), selector: 'stash@{1}', subject: 'On main: erste' },
+  ]
+  const [{ kind, text, title }] = groupRefs(['refs/stash'], REMOTES, { hash: 'a'.repeat(40), stashes })
+  assert.equal(kind, 'stash')
+  assert.equal(text, 'stash@{0}')
+  assert.equal(title, 'WIP on main: base')
+
+  // The other stash sits on another commit, so the same decoration yields its
+  // own position rather than repeating the first.
+  const [second] = groupRefs(['refs/stash'], REMOTES, { hash: 'b'.repeat(40), stashes })
+  assert.equal(second.text, 'stash@{1}')
+
+  // A commit the stash list does not know keeps a neutral label instead of
+  // claiming a position it may not hold.
+  const [unknown] = groupRefs(['refs/stash'], REMOTES, { hash: 'c'.repeat(40), stashes })
+  assert.equal(unknown.text, 'stash')
+
+  // `refs/stash` is a full ref path, and must not be read as a branch of that
+  // name — which is what happened before the stash was a kind of its own.
+  assert.equal(parseRef('refs/stash', REMOTES).kind, 'stash')
+  assert.equal(parseRef('refs/stash', REMOTES).label, 'stash')
+})
