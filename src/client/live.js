@@ -21,10 +21,8 @@ import { EVENTS_ROUTE } from './constants.js'
  *     when the view returns to the foreground.
  *
  * @param props - the session to follow, whether the tab is on screen, and the callbacks.
- * @returns whether the push channel is currently up.
  */
 export function useRepositoryWatch({ sessionId, visible, onChanged, onDegraded }) {
-  const [live, setLive] = React.useState(false)
   // The callbacks change whenever the view re-renders; the stream must not be
   // torn down and rebuilt because of that.
   const changed = React.useRef(onChanged)
@@ -32,10 +30,7 @@ export function useRepositoryWatch({ sessionId, visible, onChanged, onDegraded }
   changed.current = onChanged
   degraded.current = onDegraded
   React.useEffect(() => {
-    if (!visible || typeof EventSource !== 'function') {
-      setLive(false)
-      return undefined
-    }
+    if (!visible || typeof EventSource !== 'function') return undefined
     const address = `${EVENTS_ROUTE}?sessionId=${encodeURIComponent(sessionId)}`
     const source = new EventSource(address)
     let abandoned = false
@@ -44,14 +39,12 @@ export function useRepositoryWatch({ sessionId, visible, onChanged, onDegraded }
     source.addEventListener('ready', () => {
       opened = true
       failures = 0
-      setLive(true)
       // A stream that just opened may have missed changes while it was down.
       changed.current?.('opened')
     })
     source.addEventListener('changed', () => changed.current?.('changed'))
     source.addEventListener('degraded', event => {
       abandoned = true
-      setLive(false)
       source.close()
       let message = 'the repository watch is unavailable'
       try {
@@ -72,7 +65,6 @@ export function useRepositoryWatch({ sessionId, visible, onChanged, onDegraded }
       failures += 1
       if (failures >= 3) {
         abandoned = true
-        setLive(false)
         source.close()
         degraded.current?.('the live channel is not answering')
       }
@@ -80,7 +72,6 @@ export function useRepositoryWatch({ sessionId, visible, onChanged, onDegraded }
     return () => {
       abandoned = true
       source.close()
-      setLive(false)
     }
   }, [sessionId, visible])
   React.useEffect(() => {
@@ -95,5 +86,4 @@ export function useRepositoryWatch({ sessionId, visible, onChanged, onDegraded }
       document.removeEventListener('visibilitychange', wake)
     }
   }, [visible])
-  return live
 }

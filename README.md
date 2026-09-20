@@ -28,8 +28,7 @@ outside that sidebar.
 - The graph keeps itself current. The host watches the repository's Git
   directory and pushes one event per burst of changes over a server-sent event
   stream, so a commit made while you are looking at the tab appears on its own —
-  no refresh, no tab switch. The dot beside the refresh button says whether that
-  stream is up.
+  no refresh, no tab switch.
 - **Refresh** re-reads history and working tree by hand; a background refresh
   keeps your scroll position, your open accordion and the loaded depth, and only
   re-renders when something the rows draw actually changed.

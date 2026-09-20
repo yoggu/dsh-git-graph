@@ -192,7 +192,6 @@ test('a clean working tree is not an error', async () => {
     : Promise.resolve(page(['a'])))
   await ui.settle()
   assert.equal(find(ui.tree, node => node.props.className === 'gg-error'), undefined)
-  assert.equal(find(ui.tree, node => node.props['data-live']).props['data-live'], 'off', 'a tab without a live channel says so')
   ui.unmount()
 })
 
@@ -435,7 +434,6 @@ test('a pushed change reloads the history, and a push that changes nothing stays
 
   source.emit('ready'); ui.render()
   assert.equal(pending.length, 2, 'opening the stream re-reads once, in case changes were missed')
-  assert.ok(find(ui.tree, node => node.props['data-live'] === 'on'), 'the header says the graph is following')
   pending[1].resolve(page(['a'])); await ui.settle()
   assert.equal(find(ui.tree, node => node.props.className === 'gg-notice'), undefined, 'a push that changes nothing says nothing')
 
@@ -486,7 +484,6 @@ test('a channel that never opens gives up instead of retrying forever', async ()
   assert.equal(source.closed, false, 'a single failure is worth a retry')
   source.fail(); source.fail(); ui.render()
   assert.equal(source.closed, true, 'a channel that never opened is given up on')
-  assert.ok(find(ui.tree, node => node.props['data-live'] === 'off'))
   assert.match(find(ui.tree, node => node.props.className === 'gg-notice').children.join(''), /not answering/)
   ui.unmount()
 })
@@ -509,7 +506,6 @@ test('a degraded watch is closed and reported instead of looking alive', async (
   source.emit('degraded', { message: 'ENOSPC: inotify watch limit reached' })
   ui.render()
   assert.equal(source.closed, true, 'a watcher that failed must not be left pretending')
-  assert.ok(find(ui.tree, node => node.props['data-live'] === 'off'))
   const notice = find(ui.tree, node => node.props.className === 'gg-notice')
   assert.match(notice.children.join(''), /Live updates unavailable/)
   assert.match(notice.children.join(''), /ENOSPC/)

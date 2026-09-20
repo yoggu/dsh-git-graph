@@ -101,14 +101,10 @@ export const CSS = `
 .gg-section-heading.gg-column-heading { min-height: 31px; padding: 0; background: transparent; border-block: 1px solid var(--dsw-alias-border-l1); font-size: inherit; font-weight: 600; line-height: 30px; }
 .gg-column-heading > span { height: 30px; padding: 0 12px; border-right: 1px solid var(--dsw-alias-border-l1); text-align: center; }
 .gg-column-heading > span:last-child { border-right: 0; }
-/* The graph column's own controls: refresh is a button, not a heading that
-   happens to be clickable, and the dot says whether changes push in by
-   themselves. */
+/* The graph column's own controls: refresh and fetch are buttons, not a heading
+   that happens to be clickable. */
 .gg-column-actions { display: inline-flex; align-items: center; justify-content: center; gap: 2px; padding: 0 4px !important; }
 .gg-column-btn { width: 22px; height: 22px; }
-.gg-live-dot { flex: none; width: 6px; height: 6px; border-radius: 50%;
-  background: var(--dsw-alias-label-secondary); opacity: .4; }
-.gg-live-dot.is-live { background: var(--dsw-alias-state-success-primary); opacity: 1; }
 .gg-row { box-sizing: border-box; height: ${ROW_H}px; padding: 0 !important; border: 0; line-height: 26px; }
 .gg-row > .gg-row-body { display: contents; }
 .gg-row > .gg-row-body > .gg-description { grid-column: 2; grid-row: 1; display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; padding: 0 4px; }

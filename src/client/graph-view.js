@@ -192,7 +192,9 @@ export function GraphView({ tabInfo, sessionId }) {
     } finally { setFetching(false) }
   }, [sessionId, signal, load, loadWorking])
   React.useEffect(() => { load(); loadWorking(); return () => { request.current += 1; clearTimeout(noticeTimer.current) } }, [sessionId, signal])
-  const live = useRepositoryWatch({
+  // The push channel needs no indicator of its own: an arrival shows up as a
+  // row, and an outage reports itself in words.
+  useRepositoryWatch({
     sessionId,
     visible: tabInfo.tab.visible === true,
     onChanged: React.useCallback(() => { load(false, { background: true }); loadWorking() }, [load, loadWorking]),
@@ -235,12 +237,7 @@ export function GraphView({ tabInfo, sessionId }) {
             disabled: fetching,
             onClick: fetchRemotes,
           }, fetching ? h('span', { className: 'gg-spinner', 'aria-hidden': 'true' }) : h(GitIcon, { name: 'download', size: 13 })) : null,
-          h('span', {
-            className: `gg-live-dot${live ? ' is-live' : ''}`,
-            'data-live': live ? 'on' : 'off',
-            'aria-hidden': 'true',
-            title: live ? 'Watching the repository for changes' : 'Live updates unavailable — refresh manually',
-          })),
+          ),
         h('span', null, 'Description'), h('span', null, 'Date'), h('span', null, 'Author'), h('span', null, 'Commit')),
       error ? h('div', { className: 'gg-error', role: 'alert' }, error) : null,
       // A working-tree read can fail on its own — a repository whose history is

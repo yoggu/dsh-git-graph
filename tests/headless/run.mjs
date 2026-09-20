@@ -54,6 +54,8 @@ for (const candidate of executableCandidates) { try { await access(candidate); e
 const browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) })
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 })
 const errors = [], checks = [], requests = []
+// A subscription is observable on the server, which is where it costs something.
+let openStreams = 0
 let delayNextCommit = false
 page.on('pageerror', error => errors.push(error.message))
 
@@ -82,6 +84,8 @@ const server = createServer(async (req, res) => {
   }
   if (address.pathname === '/api/dsh-git-graph/events') {
     // The shipped handler, not a copy of it: this is the route apply() registers.
+    openStreams += 1
+    req.on('close', () => { openStreams -= 1 })
     try { await internals.openEvents(testCtx, req, res) }
     catch (error) { if (!res.headersSent) { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: false, error: error.message })) } else res.end() }
     return
@@ -219,8 +223,12 @@ try {
   await page.evaluate(() => testHarness.theme('dark'))
   await page.evaluate(() => testHarness.setSession('fixture', 'git-graph'))
   await waitGraph()
-  const liveDot = await page.waitForFunction(() => document.querySelector('.gg-live-dot')?.dataset.live === 'on', null, { timeout: 6000 }).then(() => true).catch(() => false)
-  check('The header shows that the graph follows the repository', liveDot)
+  const waitFor = async (predicate, timeout = 8000) => {
+    const until = Date.now() + timeout
+    while (Date.now() < until) { if (await predicate()) return true; await new Promise(resolve => setTimeout(resolve, 100)) }
+    return false
+  }
+  check('A visible tab subscribes to the repository', await waitFor(() => Promise.resolve(openStreams === 1)))
   const rowsBefore = await page.locator('.gg-row').count()
   execFileSync('git', ['commit', '-q', '--allow-empty', '-m', 'Live push arrives'], { cwd: dir })
   await page.waitForFunction(() => [...document.querySelectorAll('.gg-row')].some(row => row.textContent.includes('Live push arrives')), null, { timeout: 10000 })
@@ -231,7 +239,7 @@ try {
 
   // While the tab is not on screen, the stream is closed and nothing is read.
   await page.evaluate(() => testHarness.setVisible(false)); await frame()
-  check('A tab nobody is looking at closes its stream', await page.locator('.gg-live-dot[data-live="on"]').count() === 0)
+  check('A tab nobody is looking at closes its stream', await waitFor(() => Promise.resolve(openStreams === 0)))
   const requestsWhileHidden = requests.length
   execFileSync('git', ['commit', '-q', '--allow-empty', '-m', 'While hidden'], { cwd: dir })
   await new Promise(resolve => setTimeout(resolve, 2500))
