@@ -269,3 +269,50 @@ test('this plugin serialises its own writes, and a failure does not poison the q
   ])
   assert.deepEqual(other, ['fast', 'slow'])
 })
+
+test('the state, plan and action operations answer end to end through dispatch', async () => {
+  const { root, cleanup } = fixture()
+  try {
+    // The smallest Cordis context this plugin reads: a session store that knows
+    // one id and its workspace.
+    const ctx = {
+      get: name => (name === 'sessions'
+        ? { get: id => (id === 'session' ? { header: { cwd: root } } : undefined) }
+        : undefined),
+    }
+    const state = await internals.dispatch(ctx, { op: 'state', sessionId: 'session' })
+    assert.equal(state.state.branch, 'main')
+    assert.equal(state.state.busy, false)
+    assert.equal(state.state.dirty, false)
+
+    const planned = await internals.dispatch(ctx, {
+      op: 'plan', sessionId: 'session', action: 'branch.create', params: { name: 'topic', checkout: true },
+    })
+    assert.deepEqual(planned.plan.argv, ['checkout', '-b', 'topic'])
+    assert.equal(planned.blocked, null)
+    assert.deepEqual(planned.warnings, [])
+    // Planning runs nothing: the branch must not exist yet.
+    assert.equal(git(root, 'branch', '--list', 'topic'), '')
+
+    const result = await internals.dispatch(ctx, {
+      op: 'action', sessionId: 'session', action: 'branch.create', params: { name: 'topic', checkout: true },
+    })
+    assert.equal(result.action, 'branch.create')
+    assert.equal(result.before.branch, 'main')
+    assert.equal(result.after.branch, 'topic')
+    assert.match(result.output, /topic/)
+
+    // A session that is not live is refused rather than answered from another
+    // project, and an action outside the vocabulary never reaches git.
+    await assert.rejects(
+      () => internals.dispatch(ctx, { op: 'state', sessionId: 'gone' }),
+      /unknown or expired Session/,
+    )
+    await assert.rejects(
+      () => internals.dispatch(ctx, { op: 'action', sessionId: 'session', action: 'repo.wipe', params: {} }),
+      /unknown action/,
+    )
+  } finally {
+    cleanup()
+  }
+})
