@@ -35,13 +35,16 @@ outside that sidebar.
   keeps your scroll position, your open accordion and the loaded depth, and only
   re-renders when something the rows draw actually changed.
 - **Fetch** pulls every configured remote (`git fetch --all`, tags included). The
-  toolbar's network buttons appear only when a remote exists, and both update
+  toolbar button appears only when a remote exists, and it updates
   remote-tracking branches only — the working tree, the index, HEAD and your
-  local branches are untouched. The second one **fetches and prunes**: it also
-  removes the remote-tracking refs the remote no longer has, which is a
-  different promise and therefore its own button rather than a hidden modifier.
-  Push and pull live in a branch's own menu, where they are confirmed like every
-  other writing action.
+  local branches are untouched. **Fetching and pruning** is an entry in a
+  remote-tracking branch's own menu, which is where a ref the remote no longer
+  has is visible in the first place; it removes those stale refs and reports
+  what it removed. It runs without a confirmation dialog because it needs no
+  decision — it changes what this repository knows about the remote, not the
+  repository — and the menu marks the entries that do ask first with an ellipsis.
+  Push and pull live in a branch's menu, confirmed like every other writing
+  action.
 - **Every stash is in the graph**, not just the newest one. Only the newest is
   `refs/stash`; the older ones live in that ref's reflog, so the host names each
   of them as a starting point of the traversal and the badge shows the position
@@ -203,7 +206,7 @@ HTTP server, logged-in profile or DSH restart is needed. All scenarios run
 against a temporary repository that the test creates and removes; nothing of
 yours is read or written unless you ask for it.
 
-80 checks run out of the box. Setting `GRAPH_TEST_REPO` to a repository with a
+82 checks run out of the box. Setting `GRAPH_TEST_REPO` to a repository with a
 large branching history adds 3 more that exercise real lane routing and real
 working-tree reads on that history, which is only ever read.
 
@@ -213,8 +216,8 @@ source, metadata disclosure, keyboard and pointer resizing, selected-row
 visibility after shrinking, inline navigation, selection preservation,
 partially staged files, deleted/binary states, hunk navigation, wrap toggling,
 the branch filter, the find box, opening and clearing a comparison, the action
-menus and the confirmation dialog (cancelled, so nothing is written), and
-browser exceptions. Screenshots and machine-readable results go to `test-artifacts/`
+menus and the confirmation dialog (cancelled, so nothing is written), fetching
+and pruning against a real remote, and browser exceptions. Screenshots and machine-readable results go to `test-artifacts/`
 (ignored by Git). This complements, but does not verify, live DSH routing/HMR or
 its exact theme/Slot implementation. All browser processes and temp repositories
 are cleaned up at test completion.

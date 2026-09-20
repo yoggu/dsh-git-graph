@@ -1124,3 +1124,46 @@ test('a file’s action matches where the file stands', () => {
   const stagedSource = [...staged[0].fields].find(field => field.name === 'source')
   assert.equal(stagedSource.initial, 'head')
 })
+
+test('a remote badge fetches and prunes from its own menu, without a dialog', async () => {
+  const requests = []
+  const ui = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo() }, request => {
+    if (request.op === 'working') return Promise.resolve({ staged: [], unstaged: [], untracked: [] })
+    if (request.op === 'state') return Promise.resolve({ state: idleState })
+    requests.push(request)
+    if (request.op === 'fetch') {
+      return Promise.resolve({ remotes: ['origin'], added: [], updated: [], pruned: ['origin/dev'] })
+    }
+    return Promise.resolve({
+      ...page(['a']),
+      refs: {
+        refs: [{ name: 'refs/remotes/origin/dev', target: 'd'.repeat(40), kind: 'remote', isHead: false }],
+        remotes: ['origin'],
+        head: 'main',
+      },
+    })
+  })
+  await ui.settle()
+
+  nodes(ui.tree).find(node => node.type?.name === 'CommitRow').props.onRefContextMenu(
+    { clientX: 1, clientY: 1 },
+    { kind: 'remote', label: 'dev', remote: 'origin', text: 'origin/dev', remotes: [] },
+  )
+  ui.render()
+  const menu = nodes(ui.tree).find(node => node.type?.name === 'ContextMenu')
+  const entry = [...menu.props.actions].find(action => action.label.startsWith('Fetch all remotes'))
+  assert.ok(entry, 'a remote badge must offer the fetch')
+  // It runs rather than asking the host to plan: fetching needs no decision,
+  // and the menu's ellipsis is its word for "this one asks first".
+  assert.equal(typeof entry.run, 'function')
+  assert.equal(entry.action, undefined)
+  assert.ok(!entry.label.endsWith('…'))
+
+  entry.run()
+  await ui.settle()
+  assert.ok(requests.some(request => request.op === 'fetch' && request.prune === true),
+    'the entry must reach the host with pruning asked for')
+  assert.equal(find(ui.tree, node => node.type?.name === 'ActionDialog'), undefined,
+    'fetching must not open a confirmation dialog')
+  ui.unmount()
+})

@@ -377,13 +377,22 @@ try {
   await frame()
   check('Fetch discovers a branch that only the remote had', await page.locator('.gg-ref-name', { hasText: 'origin/remote-only' }).count() >= 1)
   check('The fetch reports what it found', /new branch/.test(await page.locator('.gg-notice').innerText()))
-  // Pruning is its own button because it promises something different: it
-  // removes remote-tracking refs the remote no longer has. The fixture holds
-  // one such ref on purpose (`origin/dev`), so the report has something to say.
-  const pruning = page.getByRole('button', { name: 'Fetch and prune remote-tracking branches' })
-  check('A second fetch button offers to prune', await pruning.count() === 1)
-  check('The prune button says what it removes', /no longer has/.test(await pruning.getAttribute('title')))
-  await pruning.click()
+  // The toolbar keeps two buttons; pruning lives with the remote-tracking refs
+  // it removes, which is where a stale one is visible in the first place. The
+  // fixture holds one such ref on purpose (`origin/dev`).
+  check('The toolbar keeps one refresh and one fetch button',
+    await page.locator('.gg-column-actions button').count() === 2)
+  await page.locator('.gg-ref-remote').first().click({ button: 'right' })
+  await page.locator('.gg-menu').waitFor({ timeout: 5000 })
+  const remoteMenu = await page.locator('.gg-menu-item').allInnerTexts()
+  check('A remote badge offers to fetch and prune',
+    remoteMenu.includes('Fetch all remotes and prune remote-tracking branches'))
+  // Fetching needs no decision, so its entry runs rather than asking first —
+  // which this menu spells without an ellipsis.
+  check('The fetch entry is the one that runs without a dialog',
+    !remoteMenu.some(label => label.startsWith('Fetch all remotes and prune') && label.endsWith('…')))
+  await page.getByRole('menuitem', { name: 'Fetch all remotes and prune remote-tracking branches' }).click()
+  check('Pruning from the menu does not open a dialog', await page.locator('.gg-dialog').count() === 0)
   await page.waitForFunction(() => /deleted/.test(document.querySelector('.gg-notice')?.textContent ?? ''), null, { timeout: 10000 })
   check('Pruning fetches and reports the refs it removed', /1 deleted/.test(await text('.gg-notice')))
   // `requests` is recorded on this side of the wire, not in the page.

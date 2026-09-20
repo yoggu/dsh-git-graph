@@ -119,7 +119,6 @@ export function GraphView({ tabInfo, sessionId }) {
   // or announce itself as history being read.
   const [checking, setChecking] = React.useState(false)
   const [fetching, setFetching] = React.useState(false)
-  const [pruning, setPruning] = React.useState(false)
   const [readAt, setReadAt] = React.useState(null)
   const [revision, setRevision] = React.useState(0)
   // Which branch's history is shown, and what is being searched for. The first
@@ -265,8 +264,9 @@ export function GraphView({ tabInfo, sessionId }) {
    * @param prune - whether to remove remote-tracking refs the remote no longer has.
    */
   const fetchRemotes = React.useCallback(async (prune = false) => {
-    if (prune) setPruning(true)
-    else setFetching(true)
+    // One indicator for both entries: whichever way a fetch was started, a
+    // fetch is what is running, and the toolbar button shows it.
+    setFetching(true)
     try {
       const result = await call({ op: 'fetch', sessionId, prune }, signal)
       if (signal.aborted) return
@@ -281,7 +281,7 @@ export function GraphView({ tabInfo, sessionId }) {
       setRevision(value => value + 1)
     } catch (err) {
       if (err.name !== 'AbortError') setError(String(err.message ?? err))
-    } finally { setFetching(false); setPruning(false) }
+    } finally { setFetching(false) }
   }, [sessionId, signal, load, loadWorking, loadState])
   React.useEffect(() => { load(); loadWorking(); loadState(); return () => { request.current += 1; clearTimeout(noticeTimer.current) } }, [sessionId, signal])
   // The push channel needs no indicator of its own: an arrival shows up as a
@@ -346,11 +346,25 @@ export function GraphView({ tabInfo, sessionId }) {
     if (menu === null) return []
     const context = { branch: repo?.branch ?? null, remotes: state.refs?.remotes ?? [] }
     if (menu.ref?.kind === 'stash') return stashActions(menu.ref)
-    if (menu.ref !== undefined) return refActions(menu.ref, context)
+    if (menu.ref !== undefined) {
+      const entries = refActions(menu.ref, context)
+      // Fetching is the one entry that runs without a dialog, because it needs
+      // no decision: it changes what this repository knows about the remote,
+      // not the repository. It belongs with the remote-tracking refs it
+      // updates, and pruning the ones the remote no longer has is a labelled
+      // sentence there rather than a second icon in a narrow toolbar.
+      if (menu.ref.kind === 'remote' && (state.refs?.remotes?.length ?? 0) > 0) {
+        entries.push({
+          label: 'Fetch all remotes and prune remote-tracking branches',
+          run: () => fetchRemotes(true),
+        })
+      }
+      return entries
+    }
     if (menu.commit === undefined) return []
     if (menu.commit.synthetic === true) return workingActions()
     return commitActions(menu.commit, context)
-  }, [menu, repo, state.refs])
+  }, [menu, repo, state.refs, fetchRemotes])
   const banner = repo === null ? null : repo.operation !== null
     ? h('div', { className: 'gg-op-banner', role: 'status' },
       h('span', { className: 'gg-op-text' },
@@ -439,16 +453,9 @@ export function GraphView({ tabInfo, sessionId }) {
             className: 'gg-icon-btn gg-column-btn',
             'aria-label': 'Fetch from remotes',
             title: `Fetch from ${state.refs.remotes.join(', ')} — updates remote-tracking branches only`,
-            disabled: fetching || pruning,
+            disabled: fetching,
             onClick: () => fetchRemotes(false),
           }, fetching ? h('span', { className: 'gg-spinner', 'aria-hidden': 'true' }) : h(GitIcon, { name: 'download', size: 13 })) : null,
-          (state.refs?.remotes?.length ?? 0) > 0 ? h('button', {
-            className: 'gg-icon-btn gg-column-btn',
-            'aria-label': 'Fetch and prune remote-tracking branches',
-            title: `Fetch from ${state.refs.remotes.join(', ')} and remove the remote-tracking branches the remote no longer has`,
-            disabled: fetching || pruning,
-            onClick: () => fetchRemotes(true),
-          }, pruning ? h('span', { className: 'gg-spinner', 'aria-hidden': 'true' }) : h(GitIcon, { name: 'prune', size: 13 })) : null,
           ),
         h('span', null, 'Description'), h('span', null, 'Date'), h('span', null, 'Author'), h('span', null, 'Commit')),
       filterBar,
