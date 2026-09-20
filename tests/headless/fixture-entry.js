@@ -8,7 +8,7 @@ const seats = new Map()
 const disposers = []
 window.testState = { openTabs: 0, opened: [], registrations: [], ready: false }
 const lifetime = new AbortController()
-let renderRoot, fixtureSession = 'fixture', view = 'git-graph', navigationParams = {}
+let renderRoot, fixtureSession = 'fixture', view = 'git-graph', navigationParams = {}, tabVisible = true
 const openTab = (kind, options = {}) => {
   window.testState.openTabs++
   window.testState.opened.push({ kind, params: options.params ?? {} })
@@ -16,7 +16,7 @@ const openTab = (kind, options = {}) => {
   navigationParams = options.params ?? {}
   mount()
 }
-const tabInfo = () => ({ tab: { signal: lifetime.signal, navigation: { params: navigationParams }, actions: { openTab } } })
+const tabInfo = () => ({ tab: { signal: lifetime.signal, visible: tabVisible, navigation: { params: navigationParams }, actions: { openTab } }, sidebar: { expanded: true, fullscreen: false } })
 const props = () => ({ sessionId: fixtureSession, useTabInfo: tabInfo,
   useSessions: selector => selector({ byId: { [fixtureSession]: { cwd: '/test-repository' } } }) })
 function mount() {
@@ -35,6 +35,7 @@ function mount() {
 window.testHarness = {
   setSession(sessionId, kind = 'git-graph', params = {}) { fixtureSession = sessionId; view = kind; navigationParams = params; mount() },
   theme(theme) { document.documentElement.dataset.theme = theme },
+  setVisible(visible) { tabVisible = visible; mount() },
   dispose() { renderRoot?.unmount(); lifetime.abort(); disposers.reverse().forEach(dispose => dispose?.()) },
 }
 window.__ModuleLoader__ = {

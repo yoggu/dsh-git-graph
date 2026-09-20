@@ -27,6 +27,14 @@ outside that sidebar.
   own tab, so the graph and other open diffs remain available.
 - **Changes** remains available for staged, unstaged, and untracked groups and
   refreshes from the repository without writing to it.
+- The graph keeps itself current. The host watches the repository's Git
+  directory and pushes one event per burst of changes over a server-sent event
+  stream, so a commit made while you are looking at the tab appears on its own —
+  no refresh, no tab switch. The dot beside the refresh button says whether that
+  stream is up.
+- **Refresh** re-reads history and working tree by hand; a background refresh
+  keeps your scroll position, your open accordion and the loaded depth, and only
+  re-renders when something the rows draw actually changed.
 
 The diff tab defaults to **Auto** layout: it uses Combined view below 900px and
 Split view at or above 900px. **Split** and **Combined** are explicit overrides.
@@ -73,17 +81,25 @@ reset, no merge. Every `git` call is a read, its argument list is built
 host-side, and the browser chooses from named operations rather than sending
 command text. The right-click menu copies hashes and subjects and opens views;
 it deliberately offers no mutating Git action.
-
 ## How it is wired
 
 - `lib/index.js` — the host half. It resolves the repository from the calling
   Session's own working directory (`git rev-parse --show-toplevel`, so a session
-  opened in a subdirectory still finds its repository) and serves one exact
-  route, `/api/dsh-git-graph`. A request that names no live session is refused
-  rather than answered from another project.
+  opened in a subdirectory still finds its repository) and serves two exact
+  routes: `/api/dsh-git-graph` for requests, and `/api/dsh-git-graph/events`, a
+  server-sent event stream of repository changes. A request that names no live
+  session is refused rather than answered from another project.
+- The watch behind that stream follows the Git directory alone — not the working
+  tree. Measured on a mid-sized repository that is hundreds of directories
+  instead of tens of thousands, and it carries every signal the graph draws:
+  commits, refs, staging and checkouts. It runs only while a tab is subscribed,
+  so a graph nobody is looking at costs nothing, and it debounces a burst into
+  one push. If the watch cannot start, the stream says so and the browser falls
+  back to refreshing when the tab comes back into view.
 - `src/client/` — the modular browser source. It registers four tab types in the
-  right Sidebar and renders the graph, details, patches and working tree. Its
-  imports follow an acyclic entry → registration → views → helpers direction.
+  right Sidebar and renders the graph, details and patches. Its imports follow an
+  acyclic entry → registration → views → helpers direction, with `live.js`
+  owning the push channel.
 - `client.js` — the generated, self-contained DSH browser wrapper. It keeps React
   external and runs no git itself.
 
@@ -129,7 +145,7 @@ HTTP server, logged-in profile or DSH restart is needed. All scenarios run
 against a temporary repository that the test creates and removes; nothing of
 yours is read or written unless you ask for it.
 
-38 checks run out of the box. Setting `GRAPH_TEST_REPO` to a repository with a
+44 checks run out of the box. Setting `GRAPH_TEST_REPO` to a repository with a
 large branching history adds 3 more that exercise real lane routing and real
 working-tree reads on that history, which is only ever read.
 

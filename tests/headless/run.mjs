@@ -1,8 +1,9 @@
 import { chromium } from 'playwright-core'
 import { build } from 'esbuild'
 import { readFile, writeFile, mkdir, mkdtemp, rm, access } from 'node:fs/promises'
-import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
+import { execFileSync } from 'node:child_process'
+import { createServer } from 'node:http'
 import { join } from 'node:path'
 import assert from 'node:assert/strict'
 import { internals } from '../../lib/index.js'
@@ -51,20 +52,43 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, dev
 const errors = [], checks = [], requests = []
 let delayNextCommit = false
 page.on('pageerror', error => errors.push(error.message))
-await page.route('**/*', async route => {
-  const request = route.request(), path = new URL(request.url()).pathname
-  if (new URL(request.url()).hostname !== 'git-plugin.test') return route.abort()
-  if (path === '/api/dsh-git-graph') {
-    const input = request.postDataJSON(); requests.push(input)
+
+// The page is served by a real HTTP server rather than intercepted, so the
+// plugin's own routes are exercised as shipped — including the server-sent
+// events the graph follows the repository with. Interception cannot stream, and
+// a mocked push channel would prove nothing about the real one.
+const server = createServer(async (req, res) => {
+  const address = new URL(req.url ?? '/', 'http://127.0.0.1')
+  if (address.pathname === '/api/dsh-git-graph') {
+    const chunks = []
+    for await (const chunk of req) chunks.push(chunk)
+    let input
+    try { input = JSON.parse(Buffer.concat(chunks).toString('utf8')) }
+    catch { res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: false, error: 'bad request' })); return }
+    requests.push(input)
     try {
       if (input.op === 'commit' && delayNextCommit) { delayNextCommit = false; await new Promise(resolve => setTimeout(resolve, 150)) }
-      await route.fulfill({ json: { ok: true, result: await internals.dispatch(testCtx, input) } })
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: true, result: await internals.dispatch(testCtx, input) }))
+    } catch (error) {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: false, error: error.message }))
     }
-    catch (error) { await route.fulfill({ json: { ok: false, error: error.message } }) }
-  } else if (path === '/fixture.js') await route.fulfill({ contentType: 'application/javascript', body: fixtureJS })
-  else if (path === '/client.js') await route.fulfill({ contentType: 'application/javascript', body: client })
-  else await route.fulfill({ contentType: 'text/html', body: html })
+    return
+  }
+  if (address.pathname === '/api/dsh-git-graph/events') {
+    // The shipped handler, not a copy of it: this is the route apply() registers.
+    try { await internals.openEvents(testCtx, req, res) }
+    catch (error) { if (!res.headersSent) { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: false, error: error.message })) } else res.end() }
+    return
+  }
+  const body = address.pathname === '/fixture.js' ? fixtureJS : address.pathname === '/client.js' ? client : html
+  const type = address.pathname === '/fixture.js' || address.pathname === '/client.js' ? 'application/javascript' : 'text/html'
+  res.writeHead(200, { 'content-type': `${type}; charset=utf-8` })
+  res.end(body)
 })
+await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+const origin = `http://127.0.0.1:${server.address().port}/`
 const check = (label, condition) => { assert.ok(condition, label); checks.push(label); console.log(`PASS ${label}`) }
 const screenshot = name => page.screenshot({ path: new URL(name, output).pathname })
 const frame = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
@@ -82,7 +106,7 @@ const waitDiff = async path => {
   await frame()
 }
 try {
-  await page.goto('http://git-plugin.test/')
+  await page.goto(origin)
   await waitGraph()
   check('Actual client registers four tab types and Git icon', await page.locator('.fixture-title svg').count() === 1 && await page.evaluate(() => testState.registrations.length) === 4)
   check('History exposes Graph, Description, Date, Author, Commit columns', (await text('.gg-column-heading')).replace(/\n/g, ' ').includes('Graph Description Date Author Commit'))
@@ -176,13 +200,42 @@ try {
     return { name: name.clientWidth / name.scrollWidth, remote: remote.clientWidth / remote.scrollWidth }
   })
   check('When space runs out the remote segment yields before the branch name', squeezed.remote < 0.4 && squeezed.name > 0.7)
-  check('Narrow history hides lower-priority Author and Commit columns', await page.locator('.gg-column-heading span').nth(3).evaluate(e => getComputedStyle(e).display === 'none') && await page.locator('.gg-column-heading span').nth(4).evaluate(e => getComputedStyle(e).display === 'none'))
+  const narrowColumns = await page.locator('.gg-column-heading > span').evaluateAll(nodes => Object.fromEntries(nodes.map(node => [node.textContent.trim(), getComputedStyle(node).display])))
+  check('Narrow history hides lower-priority Author and Commit columns', narrowColumns.Author === 'none' && narrowColumns.Commit === 'none' && narrowColumns.Graph !== 'none' && narrowColumns.Description !== 'none')
   await page.locator('.gg-row').nth(1).click(); await waitAccordion('Commit details')
   check('Narrow accordion stacks the 50/50 detail columns', await page.locator('.gg-accordion').evaluate(e => getComputedStyle(e).gridTemplateColumns.split(' ').length === 1 && e.scrollWidth <= e.clientWidth))
   await screenshot('accordion-narrow-dark.png')
   await page.evaluate(() => testHarness.theme('light')); await frame()
   check('Light theme keeps accordion readable', await page.locator('.gg-accordion').evaluate(e => getComputedStyle(e).backgroundColor !== 'rgba(0, 0, 0, 0)'))
   await screenshot('accordion-narrow-light.png')
+
+  // The reported case, end to end: a commit lands in the repository while the
+  // graph is open, and nobody touches the view.
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.evaluate(() => testHarness.theme('dark'))
+  await page.evaluate(() => testHarness.setSession('fixture', 'git-graph'))
+  await waitGraph()
+  const liveDot = await page.waitForFunction(() => document.querySelector('.gg-live-dot')?.dataset.live === 'on', null, { timeout: 6000 }).then(() => true).catch(() => false)
+  check('The header shows that the graph follows the repository', liveDot)
+  const rowsBefore = await page.locator('.gg-row').count()
+  execFileSync('git', ['commit', '-q', '--allow-empty', '-m', 'Live push arrives'], { cwd: dir })
+  await page.waitForFunction(() => [...document.querySelectorAll('.gg-row')].some(row => row.textContent.includes('Live push arrives')), null, { timeout: 10000 })
+  await page.locator('.gg-notice').waitFor({ timeout: 2000 })
+  check('A commit made while the graph is open appears without any user action', await page.locator('.gg-row').count() === rowsBefore + 1)
+  check('The push reports what arrived', /new commit/.test(await page.locator('.gg-notice').innerText()))
+  await screenshot('live-update.png')
+
+  // While the tab is not on screen, the stream is closed and nothing is read.
+  await page.evaluate(() => testHarness.setVisible(false)); await frame()
+  check('A tab nobody is looking at closes its stream', await page.locator('.gg-live-dot[data-live="on"]').count() === 0)
+  const requestsWhileHidden = requests.length
+  execFileSync('git', ['commit', '-q', '--allow-empty', '-m', 'While hidden'], { cwd: dir })
+  await new Promise(resolve => setTimeout(resolve, 2500))
+  check('A hidden tab reads nothing while the repository changes', requests.length === requestsWhileHidden)
+  await page.evaluate(() => testHarness.setVisible(true))
+  // Coming back opens the stream again, whose first push of state is a fresh read.
+  await page.locator('.gg-row', { hasText: 'While hidden' }).first().waitFor({ timeout: 8000 })
+  check('Returning to the tab re-reads the history', requests.length > requestsWhileHidden)
 
   check('No browser JavaScript exceptions', errors.length === 0)
   if (realRepo) check('Real repository working tree is unchanged', execFileSync('git', ['-C', realRepo, 'status', '--porcelain=v2'], { encoding: 'utf8' }) === realBefore)
@@ -193,6 +246,10 @@ try {
   await writeFile(new URL('results.json', output), JSON.stringify({ passed: checks.length, checks, failure: error.stack, errors }, null, 2))
   throw error
 } finally {
+  // The browser owns the push stream: waiting on the server first would wait
+  // for a connection the browser is still holding open.
   await browser.close()
+  server.closeAllConnections?.()
+  await new Promise(resolve => server.close(resolve))
   await rm(dir, { recursive: true, force: true })
 }

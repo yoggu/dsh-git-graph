@@ -7,7 +7,7 @@ import { diffFileIdentity, parseUnifiedPatch, planSplitRows, resolveDiffLayout }
 
 // Execute the modular source with a minimal hook runner. Pure helpers are
 // imported normally; component source is evaluated only to substitute React.
-const componentPaths = ['ui.js', 'graph-ui.js', 'diff-view.js', 'files.js', 'accordions.js', 'graph-view.js', 'views.js']
+const componentPaths = ['ui.js', 'graph-ui.js', 'diff-view.js', 'files.js', 'accordions.js', 'live.js', 'graph-view.js', 'views.js']
 const sourcePaths = [...componentPaths, 'tabs.js']
 const moduleSource = path => readFileSync(new URL(`../src/client/${path}`, import.meta.url), 'utf8')
 const cleanModule = text => text
@@ -23,10 +23,30 @@ const h = (type, props, ...children) => ({ type, props: props || {}, children: c
 const nodes = tree => !tree || typeof tree !== 'object' ? [] : [tree, ...[...tree.children, tree.props.first, tree.props.second].flatMap(nodes)]
 const find = (tree, predicate) => nodes(tree).find(predicate)
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no }); return { promise, resolve, reject } }
+
+/**
+ * The push channel the graph listens on, recorded instead of dialled.
+ *
+ * The real `EventSource` is the browser's; what matters here is that a stream
+ * exists only while the tab is visible, and that the events the host sends are
+ * what drive a refresh.
+ */
+class FakeEventSource {
+  static instances = []
+  static reset() { FakeEventSource.instances = [] }
+  constructor(url) { this.url = url; this.listeners = new Map(); this.closed = false; FakeEventSource.instances.push(this) }
+  addEventListener(name, listener) {
+    if (!this.listeners.has(name)) this.listeners.set(name, [])
+    this.listeners.get(name).push(listener)
+  }
+  emit(name, data = {}) { for (const listener of this.listeners.get(name) ?? []) listener({ data: JSON.stringify(data) }) }
+  fail() { this.onerror?.() }
+  close() { this.closed = true }
+}
 // The real formatter rather than a stub, so a missing snapshot time is exercised.
 const formatTime = runInNewContext(`${section('formatTime', 'sessionOf')}\nformatTime`, {})
 const openAccordionBySession = new Map()
-test.beforeEach(() => openAccordionBySession.clear())
+test.beforeEach(() => { openAccordionBySession.clear(); FakeEventSource.reset() })
 
 function mount(name, initialProps, call = () => Promise.resolve({})) {
   const slots = [], effects = []
@@ -51,10 +71,12 @@ function mount(name, initialProps, call = () => Promise.resolve({})) {
     graphEdgePath: () => '',
     ROW_H: 26, LANE_X0: 12, LANE_W: 12, DOT_R: 4, LANE_COLORS: ['blue'],
     EMPTY_TREE: 'empty', DIFF_KIND: 'git-diff', ACCORDION_H: 300,
+    EVENTS_ROUTE: '/api/dsh-git-graph/events',
     ACCORDION_MIN_H: 180, ACCORDION_MAX_H: 720, ACCORDION_SPLIT: 50,
     openAccordionBySession, accordionLayoutBySession: new Map(),
-    window: { innerWidth: 1200, innerHeight: 800 }, navigator: {},
-    document: { addEventListener() {}, removeEventListener() {} },
+    window: { innerWidth: 1200, innerHeight: 800, addEventListener() {}, removeEventListener() {} }, navigator: {},
+    document: { visibilityState: 'visible', addEventListener() {}, removeEventListener() {} },
+    EventSource: FakeEventSource,
     ResizeObserver: class { observe() {} disconnect() {} },
   }
   const component = runInNewContext(`${runtimeSource}\n${name}`, context)
@@ -77,7 +99,7 @@ const panel = tree => find(tree, n => n.type?.name === 'DiffPanel')
 const accordion = tree => find(tree, n => n.type?.name === 'CommitAccordion')
 const commit = hash => ({ hash, parents: [], subject: hash, refs: [] })
 const page = hashes => ({ commits: hashes.map(commit), nextSkip: hashes.length, exhausted: false, refs: {} })
-const tabInfo = () => ({ tab: { signal: new AbortController().signal } })
+const tabInfo = (visible = false) => ({ tab: { signal: new AbortController().signal, visible } })
 
 test('commit detail loading occupies the accordion shell', () => {
   const pending = deferred()
@@ -161,6 +183,27 @@ test('a failed working-tree read reports itself instead of crashing the view', a
   const summary = find(ui.tree, node => node.props.className === 'gg-diff-summary')
   assert.equal(summary.children.join(''), 'Snapshot unavailable')
   assert.match(find(ui.tree, node => node.props.className === 'gg-error').children.join(''), /not running/)
+  ui.unmount()
+})
+
+test('a failed working-tree read reports itself instead of looking like a clean tree', async () => {
+  const ui = mount('GraphView', { sessionId: 'a', tabInfo: tabInfo() }, request => request.op === 'working'
+    ? Promise.reject(new Error('This session is not running'))
+    : Promise.resolve(page(['a'])))
+  await ui.settle()
+  const alert = find(ui.tree, node => node.props.className === 'gg-error')
+  assert.match(alert.children.join(''), /Working tree/)
+  assert.match(alert.children.join(''), /not running/)
+  ui.unmount()
+})
+
+test('a clean working tree is not an error', async () => {
+  const ui = mount('GraphView', { sessionId: 'a', tabInfo: tabInfo() }, request => request.op === 'working'
+    ? quietWorking()
+    : Promise.resolve(page(['a'])))
+  await ui.settle()
+  assert.equal(find(ui.tree, node => node.props.className === 'gg-error'), undefined)
+  assert.equal(find(ui.tree, node => node.props['data-live']).props['data-live'], 'off', 'a tab without a live channel says so')
   ui.unmount()
 })
 
@@ -251,7 +294,7 @@ test('history refresh keeps the open accordion while replacing commit objects', 
   const row = find(ui.tree, n => n.type?.name === 'CommitRow' && n.props.row.commit.hash === 'b')
   assert.ok(row, nodes(ui.tree).map(n => `${n.type?.name || n.type}: ${n.children.filter(x => typeof x === 'string').join(' ')}`).join('\n'))
   row.props.onSelect(commit('b')); ui.render()
-  find(ui.tree, n => n.props['aria-label'] === 'Refresh Git').props.onClick(); ui.render()
+  find(ui.tree, n => n.props['aria-label'] === 'Refresh history and working changes').props.onClick(); ui.render()
   assert.equal(accordion(ui.tree).props.hash, 'b')
   pending[1].resolve(page(['new', 'a', 'b'])); await ui.settle()
   assert.equal(accordion(ui.tree).props.hash, 'b')
@@ -328,7 +371,7 @@ test('late history response cannot overwrite newer refresh', async () => {
   })
   pending[0].resolve(page(['a'])); await ui.settle()
   // Two invocations from the same render also model a queued rapid input.
-  const refresh = find(ui.tree, n => n.props['aria-label'] === 'Refresh Git').props.onClick
+  const refresh = find(ui.tree, n => n.props['aria-label'] === 'Refresh history and working changes').props.onClick
   refresh(); refresh(); ui.render()
   pending[2].resolve(page(['new', 'a'])); await ui.settle()
   pending[1].resolve(page(['stale'])); await ui.settle()
@@ -355,5 +398,148 @@ test('history context menu does not expose removed comparison actions', () => {
   assert.equal(labels.length, 4)
   assert.ok(labels.includes('Open commit details'))
   assert.ok(labels.every(label => !/compar/i.test(label)))
+  ui.unmount()
+})
+
+test('a commit list that would draw the same graph is recognised as unchanged', () => {
+  const { sameCommits, newCommitCount } = runInNewContext(`${runtimeSource}\n;({ sameCommits, newCommitCount })`, {})
+  const base = ['a', 'b'].map(hash => ({ hash, parents: [hash + '-p'], subject: hash, authorName: 'A', authorDate: '2024-01-01', refs: ['HEAD -> main'] }))
+  const copy = JSON.parse(JSON.stringify(base))
+  assert.equal(sameCommits(base, copy), true, 'equal content is one graph, even as fresh objects')
+  assert.equal(sameCommits(base, base), true)
+  assert.equal(sameCommits(base, [...copy.slice(0, 1)]), false, 'a shorter list draws different rows')
+  const movedRef = JSON.parse(JSON.stringify(base)); movedRef[0].refs = ['HEAD -> main', 'origin/main']
+  assert.equal(sameCommits(base, movedRef), false, 'a ref that moved must reach the rows')
+  const reworded = JSON.parse(JSON.stringify(base)); reworded[1].subject = 'other'
+  assert.equal(sameCommits(base, reworded), false)
+  const reparented = JSON.parse(JSON.stringify(base)); reparented[0].parents = ['other-parent']
+  assert.equal(sameCommits(base, reparented), false)
+  assert.equal(newCommitCount(base.map(c => ({ hash: c.hash })), ['new', 'a', 'b'].map(hash => ({ hash }))), 1)
+  assert.equal(newCommitCount([], [{ hash: 'x' }]), 1)
+})
+
+const quietWorking = () => Promise.resolve({ staged: [], unstaged: [], untracked: [] })
+
+test('a hidden tab holds no push stream, a visible one subscribes to its session', async () => {
+  const respond = request => request.op === 'working' ? quietWorking() : Promise.resolve(page(['a']))
+  const hidden = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo(false) }, respond)
+  await hidden.settle()
+  assert.equal(FakeEventSource.instances.length, 0, 'a tab nobody is looking at costs the host nothing')
+  hidden.unmount()
+
+  const shown = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo(true) }, respond)
+  await shown.settle()
+  assert.equal(FakeEventSource.instances.length, 1)
+  assert.match(FakeEventSource.instances[0].url, /\/api\/dsh-git-graph\/events\?sessionId=one/)
+  shown.unmount()
+  assert.equal(FakeEventSource.instances[0].closed, true, 'leaving the tab closes the stream')
+})
+
+test('a pushed change reloads the history, and a push that changes nothing stays quiet', async () => {
+  const pending = []
+  const ui = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo(true) }, request => {
+    if (request.op === 'working') return quietWorking()
+    const next = deferred(); pending.push(next); return next.promise
+  })
+  pending[0].resolve(page(['a'])); await ui.settle()
+  const source = FakeEventSource.instances[0]
+
+  source.emit('ready'); ui.render()
+  assert.equal(pending.length, 2, 'opening the stream re-reads once, in case changes were missed')
+  assert.ok(find(ui.tree, node => node.props['data-live'] === 'on'), 'the header says the graph is following')
+  pending[1].resolve(page(['a'])); await ui.settle()
+  assert.equal(find(ui.tree, node => node.props.className === 'gg-notice'), undefined, 'a push that changes nothing says nothing')
+
+  source.emit('changed'); ui.render()
+  assert.equal(pending.length, 3)
+  pending[2].resolve(page(['new', 'a'])); await ui.settle()
+  const notice = find(ui.tree, node => node.props.className === 'gg-notice')
+  assert.match(notice.children.join(''), /1 new commit/)
+
+  const hashes = nodes(ui.tree).filter(node => node.type?.name === 'CommitRow').map(node => node.props.row.commit.hash)
+  assert.deepEqual(hashes, ['new', 'a'])
+  ui.unmount()
+})
+
+test('a background push failure keeps the rows it could not replace', async () => {
+  const pending = []
+  const ui = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo(true) }, request => {
+    if (request.op === 'working') return quietWorking()
+    const next = deferred(); pending.push(next); return next.promise
+  })
+  pending[0].resolve(page(['a'])); await ui.settle()
+  FakeEventSource.instances[0].emit('changed'); ui.render()
+  pending[1].reject(new Error('repository unavailable')); await ui.settle()
+  assert.equal(find(ui.tree, node => node.props.role === 'alert'), undefined, 'a background failure is not shouted about')
+  assert.deepEqual(nodes(ui.tree).filter(node => node.type?.name === 'CommitRow').map(node => node.props.row.commit.hash), ['a'])
+  ui.unmount()
+})
+
+test('a push that lands while the first read is in flight does not leave the spinner on', async () => {
+  const pending = []
+  const ui = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo(true) }, request => {
+    if (request.op === 'working') return quietWorking()
+    const next = deferred(); pending.push(next); return next.promise
+  })
+  assert.ok(find(ui.tree, node => node.props.className === 'gg-history-status'), 'the first read is loading')
+  FakeEventSource.instances[0].emit('changed'); ui.render()
+  pending[1].resolve(page(['a'])); await ui.settle()
+  pending[0].resolve(page(['a'])); await ui.settle()
+  assert.equal(find(ui.tree, node => node.props.className === 'gg-history-status'), undefined, 'the superseded read must not strand its spinner')
+  ui.unmount()
+})
+
+test('a channel that never opens gives up instead of retrying forever', async () => {
+  const ui = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo(true) }, request => request.op === 'working' ? quietWorking() : Promise.resolve(page(['a'])))
+  await ui.settle()
+  const source = FakeEventSource.instances[0]
+  source.fail(); ui.render()
+  assert.equal(source.closed, false, 'a single failure is worth a retry')
+  source.fail(); source.fail(); ui.render()
+  assert.equal(source.closed, true, 'a channel that never opened is given up on')
+  assert.ok(find(ui.tree, node => node.props['data-live'] === 'off'))
+  assert.match(find(ui.tree, node => node.props.className === 'gg-notice').children.join(''), /not answering/)
+  ui.unmount()
+})
+
+test('a working channel is left to the browser to repair', async () => {
+  const ui = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo(true) }, request => request.op === 'working' ? quietWorking() : Promise.resolve(page(['a'])))
+  await ui.settle()
+  const source = FakeEventSource.instances[0]
+  source.emit('ready'); ui.render()
+  for (let i = 0; i < 5; i++) source.fail()
+  ui.render()
+  assert.equal(source.closed, false, 'a stream that had worked is left for the browser to repair')
+  ui.unmount()
+})
+
+test('a degraded watch is closed and reported instead of looking alive', async () => {
+  const ui = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo(true) }, request => request.op === 'working' ? quietWorking() : Promise.resolve(page(['a'])))
+  await ui.settle()
+  const source = FakeEventSource.instances[0]
+  source.emit('degraded', { message: 'ENOSPC: inotify watch limit reached' })
+  ui.render()
+  assert.equal(source.closed, true, 'a watcher that failed must not be left pretending')
+  assert.ok(find(ui.tree, node => node.props['data-live'] === 'off'))
+  const notice = find(ui.tree, node => node.props.className === 'gg-notice')
+  assert.match(notice.children.join(''), /Live updates unavailable/)
+  assert.match(notice.children.join(''), /ENOSPC/)
+  ui.unmount()
+})
+
+test('the header refresh is a button with a spinner, not a clickable heading', async () => {
+  const pending = []
+  const ui = mount('GraphView', { sessionId: 'one', tabInfo: tabInfo(false) }, request => {
+    if (request.op === 'working') return quietWorking()
+    const next = deferred(); pending.push(next); return next.promise
+  })
+  const button = find(ui.tree, node => node.props['aria-label'] === 'Refresh history and working changes')
+  assert.equal(button.type, 'button')
+  assert.match(button.props.title, /^Refresh history and working changes/)
+  await ui.settle()
+  button.props.onClick(); ui.render()
+  assert.ok(find(ui.tree, node => node.props.className === 'gg-spinner'), 'a refresh shows progress on the button')
+  pending[1].resolve(page(['a'])); await ui.settle()
+  assert.match(find(ui.tree, node => node.props['aria-label'] === 'Refresh history and working changes').props.title, /last read/)
   ui.unmount()
 })

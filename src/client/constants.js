@@ -8,6 +8,8 @@ export const CHANGES_ID = 'dsh-git-graph/changes'
 export const CHANGES_KIND = 'git-changes'
 
 export const ROUTE = '/api/dsh-git-graph'
+/** The host pushes repository changes to this route while the tab is on screen. */
+export const EVENTS_ROUTE = '/api/dsh-git-graph/events'
 export const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 
 export const LANE_COLORS = [
