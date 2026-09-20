@@ -22,6 +22,10 @@ await put('deleted.py', 'print("remove me")\n')
 await put('image.bin', Buffer.from([0, 1, 2, 3]))
 git('init', '-q'); git('config', 'user.name', 'UI Test'); git('config', 'user.email', 'ui@example.invalid'); git('add', '.'); git('commit', '-qm', 'Base')
 git('branch', '-M', 'main'); git('checkout', '-qb', 'topic')
+// A tag on the oldest commit, where no branch label sits beside it: the badge
+// it wears is the whole decoration, so the glyph it draws is what a reader has
+// to identify it by.
+git('tag', 'v1.0.0')
 await mkdir(join(dir, 'src/components'), { recursive: true })
 await put('src/topic.ts', 'export function topic() { return true; }\n'); git('add', '.'); git('commit', '-qm', 'Topic change')
 git('checkout', '-q', 'main'); await put('src/main.ts', 'export const main = 1;\n'); git('add', '.'); git('commit', '-qm', 'Main change'); git('merge', '--no-ff', '-qm', 'Merge topic', 'topic')
@@ -147,6 +151,18 @@ try {
     && await commitRow.locator('.gg-ref-head .gg-ref-remote-name').innerText() === 'origin'
     && await commitRow.locator('.gg-ref-remote-name').evaluate(e => getComputedStyle(e).fontStyle) === 'italic')
   check('A drifted remote-tracking branch keeps its own full-name badge', await rows.nth(2).locator('.gg-ref-remote .gg-ref-name').innerText() === 'origin/dev')
+  // A tag is not a branch, and the shipped bundle has to draw it as a tag: the
+  // glyph the tag badge carries must not be the branch mark the head badge
+  // beside it wears, and it must be a real drawing (a body plus its hole)
+  // rather than the empty svg an unknown icon name would produce.
+  const tagBadge = page.locator('.gg-ref-tag').first()
+  const tagGlyph = await tagBadge.locator('.gg-ref-icon svg path').evaluateAll(nodes => nodes.map(node => node.getAttribute('d')))
+  const branchGlyph = await commitRow.locator('.gg-ref-head .gg-ref-icon svg path').evaluateAll(nodes => nodes.map(node => node.getAttribute('d')))
+  check('A tag badge wears the tag glyph, not the branch mark',
+    await tagBadge.locator('.gg-ref-name').innerText() === 'v1.0.0'
+    && tagGlyph.length === 2 && tagGlyph.every(d => typeof d === 'string' && d.length > 0)
+    && tagGlyph[0] !== branchGlyph[0])
+  await screenshot('refs-tag-glyph.png')
   await screenshot('refs-combined-remote.png')
   delayNextCommit = true
   await commitRow.click()

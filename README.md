@@ -16,6 +16,9 @@ outside that sidebar.
 - A branch that still agrees with its remote-tracking branch wears one badge
   naming both — `main` with an italic `origin` — so `origin/main` only gets its
   own full-name badge once it has drifted onto a commit of its own.
+- Every ref badge wears the mark of what it is: a tag wears the tag glyph, while
+  branches, remote-tracking branches, a detached `HEAD` and `stash@{n}` wear the
+  branch mark. A tag is therefore not read as a branch before its name is read.
 - When the worktree is dirty, a grey **Uncommitted changes (n)** row appears above
   the commits. A partially staged path counts once in `n`, while its staged and
   unstaged changes remain separate entries.

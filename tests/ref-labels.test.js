@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { groupRefs, parseRef, RefBadges } from '../src/client/graph-ui.js'
+import { groupRefs, parseRef, RefBadges, refGlyph } from '../src/client/graph-ui.js'
+import { GitIcon } from '../src/client/ui.js'
 
 const REMOTES = ['origin', 'upstream']
 const own = value => JSON.parse(JSON.stringify(value))
@@ -107,6 +108,23 @@ test('the in-sync segment never shares a class with a standalone remote badge', 
   assert.equal(standalone.props.className, 'gg-ref gg-ref-remote')
   const [synced] = RefBadges({ refs: labels(['main', 'origin/main']) }).props.children
   assert.equal(synced.props.children.at(-1).props.className, 'gg-ref-remote-name')
+})
+
+test('a tag badge wears the tag glyph, every branch-like badge the branch mark', () => {
+  // The badge told a tag and a branch apart by name only, so a tagged commit
+  // was decorated with the branch mark — the one shape that says "this is a
+  // branch". The glyph now follows the kind.
+  const glyphOf = ref => RefBadges({ refs: [ref] }).props.children[0].props.children[0].props.children.props.name
+  const [tag] = labels(['tag: v1.0.0'])
+  assert.equal(glyphOf(tag), 'tag')
+  for (const ref of labels(['HEAD -> main', 'feature/x', 'origin/release-2.0', 'HEAD'])) {
+    assert.equal(glyphOf(ref), 'branch', `${ref.kind} keeps the branch mark`)
+  }
+  assert.equal(refGlyph('tag'), 'tag')
+  assert.equal(refGlyph('stash'), 'branch')
+  // Naming a glyph is not drawing it: an unknown name yields an empty svg, so
+  // the table is checked for the paths themselves.
+  assert.ok(GitIcon({ name: 'tag' }).props.children.length > 0, 'the tag glyph is drawn')
 })
 
 test('a row without refs renders nothing', () => {

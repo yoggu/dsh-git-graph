@@ -123,6 +123,11 @@ export function GitIcon({ name, size = 15, className }) {
     download: ['M8 2.4v6.9', 'M4.9 6.4 8 9.5l3.1-3.1', 'M2.9 12.7h10.2'],
     changes: ['M2 8h2.5l1.6-3.4L8 11.6l1.6-3.6H14'],
     branch: ['M4 5v6', 'M4 9c0-4 8-1 8-5', 'M4 2a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3', 'M4 11a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3', 'M12 1a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3'],
+    // A tag is a label, not a line of history: the slanted body with the hole
+    // it is tied through says so at a glance, where a branch mark would claim
+    // the tag names a branch. The hole is a round-capped dot, which is the
+    // smallest mark that still reads at the badge's 13px.
+    tag: ['M13.73 8.94 8.95 13.72a1.33 1.33 0 0 1-1.89 0L1.33 8V1.33h6.67l5.72 5.72a1.33 1.33 0 0 1 0 1.89z', 'M4.67 4.67h.01'],
     copy: ['M6 6V3.5h7.5V11H11', 'M2.5 6H10v6.5H2.5z'],
     wrap: ['M2 4h12', 'M2 8h8.5a2 2 0 1 1 0 4H8', 'M2 12h3', 'M9.5 11l1.5 1-1.5 1'],
     expand: ['M8 3v10', 'M3 8h10'],

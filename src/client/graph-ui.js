@@ -155,6 +155,22 @@ export function matchesFilter(commit, remotes, query) {
 }
 
 /**
+ * The glyph a badge wears.
+ *
+ * A tag is not a branch, so it must not wear the branch mark: a reader tells
+ * "this commit is on a branch" from "this commit is tagged" by the shape
+ * before reading a single name. Everything else — HEAD, local and
+ * remote-tracking branches, a detached HEAD, a stash — names a position in the
+ * history, which is what the branch mark draws.
+ *
+ * @param kind - the badge's kind, as {@link groupRefs} reports it.
+ * @returns the name of the glyph in `GitIcon`'s set.
+ */
+export function refGlyph(kind) {
+  return kind === 'tag' ? 'tag' : 'branch'
+}
+
+/**
  * Render the per-commit badges a graph row wears.
  *
  * A badge that absorbed its remote-tracking branches shows each remote's name
@@ -181,7 +197,7 @@ export function RefBadges({ refs, onContextMenu }) {
       event.stopPropagation()
       onContextMenu(event, ref)
     },
-  }, h('span', { className: 'gg-ref-icon' }, h(GitIcon, { name: 'branch', size: 13 })),
+  }, h('span', { className: 'gg-ref-icon' }, h(GitIcon, { name: refGlyph(ref.kind), size: 13 })),
   h('span', { className: 'gg-ref-name' }, ref.text),
   ...ref.remotes.map(remote => h('span', {
     key: remote.full,
