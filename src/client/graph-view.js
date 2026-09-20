@@ -54,6 +54,29 @@ export function newCommitCount(previous, next) {
   return index < 0 ? next.length : index
 }
 
+/**
+ * One line describing what a fetch did.
+ *
+ * A fetch is the only thing this plugin does that another machine can answer,
+ * so its outcome is worth saying plainly: what appeared, what moved, what is
+ * gone — or that there is nothing to fetch from.
+ *
+ * @param result - the host's answer to the fetch request.
+ * @returns a short report for the reader.
+ */
+export function describeFetch(result) {
+  if (typeof result?.error === 'string' && result.error.length > 0) return `Fetch failed — ${result.error}`
+  if (typeof result?.skipped === 'string' && result.skipped.length > 0) return result.skipped
+  const parts = []
+  const added = result?.added?.length ?? 0
+  const updated = result?.updated?.length ?? 0
+  const pruned = result?.pruned?.length ?? 0
+  if (added > 0) parts.push(`${added} new branch${added === 1 ? '' : 'es'}`)
+  if (updated > 0) parts.push(`${updated} updated`)
+  if (pruned > 0) parts.push(`${pruned} deleted`)
+  return parts.length === 0 ? 'Already up to date' : `Remote: ${parts.join(', ')}`
+}
+
 /** Accordion history: full-width graph rows, with one row-local expansion. */
 export function GraphView({ tabInfo, sessionId }) {
   const signal = tabInfo.tab.signal
@@ -81,6 +104,7 @@ export function GraphView({ tabInfo, sessionId }) {
   // A background refresh is not the same as loading: it must not blank the view
   // or announce itself as history being read.
   const [checking, setChecking] = React.useState(false)
+  const [fetching, setFetching] = React.useState(false)
   const [readAt, setReadAt] = React.useState(null)
   const [revision, setRevision] = React.useState(0)
   const [menu, setMenu] = React.useState(null)
@@ -150,6 +174,23 @@ export function GraphView({ tabInfo, sessionId }) {
     loadWorking()
     setRevision(value => value + 1)
   }, [load, loadWorking])
+  const fetchRemotes = React.useCallback(async () => {
+    setFetching(true)
+    try {
+      const result = await call({ op: 'fetch', sessionId, prune: false }, signal)
+      if (signal.aborted) return
+      if (typeof result.error === 'string' && result.error.length > 0) setError(describeFetch(result))
+      else {
+        setError(null)
+        flash(describeFetch(result))
+      }
+      load(false, { background: true, report: true })
+      loadWorking()
+      setRevision(value => value + 1)
+    } catch (err) {
+      if (err.name !== 'AbortError') setError(String(err.message ?? err))
+    } finally { setFetching(false) }
+  }, [sessionId, signal, load, loadWorking])
   React.useEffect(() => { load(); loadWorking(); return () => { request.current += 1; clearTimeout(noticeTimer.current) } }, [sessionId, signal])
   const live = useRepositoryWatch({
     sessionId,
@@ -187,6 +228,13 @@ export function GraphView({ tabInfo, sessionId }) {
           }, busy || checking
             ? h('span', { className: 'gg-spinner', 'aria-hidden': 'true' })
             : h(GitIcon, { name: 'refresh', size: 13 })),
+          (state.refs?.remotes?.length ?? 0) > 0 ? h('button', {
+            className: 'gg-icon-btn gg-column-btn',
+            'aria-label': 'Fetch from remotes',
+            title: `Fetch from ${state.refs.remotes.join(', ')} — updates remote-tracking branches only`,
+            disabled: fetching,
+            onClick: fetchRemotes,
+          }, fetching ? h('span', { className: 'gg-spinner', 'aria-hidden': 'true' }) : h(GitIcon, { name: 'download', size: 13 })) : null,
           h('span', {
             className: `gg-live-dot${live ? ' is-live' : ''}`,
             'data-live': live ? 'on' : 'off',

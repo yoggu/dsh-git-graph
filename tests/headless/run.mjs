@@ -1,6 +1,7 @@
 import { chromium } from 'playwright-core'
 import { build } from 'esbuild'
 import { readFile, writeFile, mkdir, mkdtemp, rm, access } from 'node:fs/promises'
+import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { execFileSync } from 'node:child_process'
 import { createServer } from 'node:http'
@@ -29,10 +30,13 @@ await put('src/components/added.py', 'def greet(name):\n    return "Hello " + na
 await put('image.bin', Buffer.from([0, 9, 8, 7])); await rm(join(dir, 'deleted.py')); git('add', '-A'); git('commit', '-qm', 'Review multiple statuses')
 await put('app.ts', 'export const total = 50;\n// staged\n'); git('add', 'app.ts')
 await put('app.ts', 'export const total = 60;\n// unstaged\n'); await put('untracked.txt', 'Untracked content\n')
-// One remote-tracking branch that agrees with its local branch, and one that has
+// A real remote on disk, so fetching is exercised without a network: one
+// remote-tracking branch that agrees with its local branch, and one that has
 // drifted onto a commit where no local branch of that name exists.
-git('remote', 'add', 'origin', 'https://example.invalid/dsh-git-graph.git')
-git('update-ref', 'refs/remotes/origin/main', git('rev-parse', 'HEAD'))
+const remoteDir = mkdtempSync(join(tmpdir(), 'gg-remote-'))
+execFileSync('git', ['init', '-q', '--bare', remoteDir])
+git('remote', 'add', 'origin', remoteDir)
+git('push', '-q', '-u', 'origin', 'main')
 git('update-ref', 'refs/remotes/origin/dev', git('rev-parse', 'HEAD~1'))
 const realRepo = process.env.GRAPH_TEST_REPO || ''
 const realBefore = realRepo ? execFileSync('git', ['-C', realRepo, 'status', '--porcelain=v2'], { encoding: 'utf8' }) : ''
@@ -237,6 +241,19 @@ try {
   await page.locator('.gg-row', { hasText: 'While hidden' }).first().waitFor({ timeout: 8000 })
   check('Returning to the tab re-reads the history', requests.length > requestsWhileHidden)
 
+  // Fetch is the one action that leaves this machine. A branch that exists only
+  // on the remote must arrive without the working tree being touched.
+  execFileSync('git', ['-C', remoteDir, 'branch', 'remote-only', 'main'])
+  const worktreeBefore = execFileSync('git', ['status', '--porcelain=v2'], { cwd: dir, encoding: 'utf8' })
+  const headBefore = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).trim()
+  await page.getByRole('button', { name: 'Fetch from remotes' }).click()
+  await page.waitForFunction(() => document.body.textContent.includes('origin/remote-only'), null, { timeout: 15000 })
+  await frame()
+  check('Fetch discovers a branch that only the remote had', await page.locator('.gg-ref-name', { hasText: 'origin/remote-only' }).count() >= 1)
+  check('The fetch reports what it found', /new branch/.test(await page.locator('.gg-notice').innerText()))
+  check('A fetch leaves the working tree and HEAD alone', execFileSync('git', ['status', '--porcelain=v2'], { cwd: dir, encoding: 'utf8' }) === worktreeBefore && execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).trim() === headBefore)
+  await screenshot('fetch-discovers-branch.png')
+
   check('No browser JavaScript exceptions', errors.length === 0)
   if (realRepo) check('Real repository working tree is unchanged', execFileSync('git', ['-C', realRepo, 'status', '--porcelain=v2'], { encoding: 'utf8' }) === realBefore)
   await writeFile(new URL('results.json', output), JSON.stringify({ passed: checks.length, checks, errors, browser: await browser.version(), executablePath, limits: 'Real client and host Git reads, substitute Cordis mount/theme. Not a live DSH routing/HMR test.', realRepo: realRepo || null, requests: requests.length }, null, 2))
@@ -252,4 +269,5 @@ try {
   server.closeAllConnections?.()
   await new Promise(resolve => server.close(resolve))
   await rm(dir, { recursive: true, force: true })
+  await rm(remoteDir, { recursive: true, force: true })
 }

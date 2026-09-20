@@ -35,6 +35,10 @@ outside that sidebar.
 - **Refresh** re-reads history and working tree by hand; a background refresh
   keeps your scroll position, your open accordion and the loaded depth, and only
   re-renders when something the rows draw actually changed.
+- **Fetch** pulls every configured remote (`git fetch --all`, tags included). It
+  is the one button that touches the network, it appears only when a remote
+  exists, and it updates remote-tracking branches only — the working tree, the
+  index, HEAD and your local branches are untouched.
 
 The diff tab defaults to **Auto** layout: it uses Combined view below 900px and
 Split view at or above 900px. **Split** and **Combined** are explicit overrides.
@@ -76,11 +80,14 @@ plus [Sublime Merge](https://www.sublimemerge.com/docs/getting_started#understan
 
 ## What it never does
 
-It never writes to a repository. There is no checkout, no commit, no fetch, no
-reset, no merge. Every `git` call is a read, its argument list is built
-host-side, and the browser chooses from named operations rather than sending
-command text. The right-click menu copies hashes and subjects and opens views;
-it deliberately offers no mutating Git action.
+It never touches your work. There is no checkout, no commit, no reset, no merge,
+no push: every argument list is built host-side, and the browser chooses from
+named operations rather than sending command text. The one writing action is
+**Fetch**, which changes only what this repository knows about the remote
+(`refs/remotes/*`) and leaves the working tree, the index, HEAD and every local
+branch exactly as they were. The right-click menu copies hashes and subjects and
+opens views; it offers no mutating Git action.
+
 ## How it is wired
 
 - `lib/index.js` — the host half. It resolves the repository from the calling
@@ -145,7 +152,7 @@ HTTP server, logged-in profile or DSH restart is needed. All scenarios run
 against a temporary repository that the test creates and removes; nothing of
 yours is read or written unless you ask for it.
 
-44 checks run out of the box. Setting `GRAPH_TEST_REPO` to a repository with a
+47 checks run out of the box. Setting `GRAPH_TEST_REPO` to a repository with a
 large branching history adds 3 more that exercise real lane routing and real
 working-tree reads on that history, which is only ever read.
 

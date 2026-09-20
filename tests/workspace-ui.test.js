@@ -543,3 +543,13 @@ test('the header refresh is a button with a spinner, not a clickable heading', a
   assert.match(find(ui.tree, node => node.props['aria-label'] === 'Refresh history and working changes').props.title, /last read/)
   ui.unmount()
 })
+
+test('a fetch report says what happened, and says nothing when nothing did', () => {
+  const { describeFetch } = runInNewContext(`${runtimeSource}\n;({ describeFetch })`, {})
+  assert.equal(describeFetch({ added: [], updated: [], pruned: [], remotes: ['origin'] }), 'Already up to date')
+  assert.equal(describeFetch({ added: ['origin/a'], updated: [], pruned: [], remotes: ['origin'] }), 'Remote: 1 new branch')
+  assert.equal(describeFetch({ added: ['origin/a', 'origin/b'], updated: [], pruned: [], remotes: ['origin'] }), 'Remote: 2 new branches')
+  assert.equal(describeFetch({ added: [], updated: ['origin/main'], pruned: ['origin/gone'], remotes: ['origin'] }), 'Remote: 1 updated, 1 deleted')
+  assert.equal(describeFetch({ added: [], updated: [], pruned: [], skipped: 'no remote is configured' }), 'no remote is configured')
+  assert.equal(describeFetch({ error: 'fatal: could not read from remote' }), 'Fetch failed — fatal: could not read from remote')
+})
