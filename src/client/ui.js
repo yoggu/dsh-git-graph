@@ -121,6 +121,9 @@ export function GitIcon({ name, size = 15, className }) {
   const paths = {
     refresh: ['M13.5 8a5.5 5.5 0 1 1-1.6-3.9', 'M13.6 1.9v3.2h-3.2'],
     download: ['M8 2.4v6.9', 'M4.9 6.4 8 9.5l3.1-3.1', 'M2.9 12.7h10.2'],
+    // Fetch again and take away what the remote no longer has: the same
+    // download mark, with the removal drawn at its shoulder.
+    prune: ['M6.6 3v6.4', 'M3.8 6.6 6.6 9.4l2.8-2.8', 'M1.9 12.7h9.4', 'M11.4 1.2l2.3 2.3', 'M13.7 1.2l-2.3 2.3'],
     changes: ['M2 8h2.5l1.6-3.4L8 11.6l1.6-3.6H14'],
     branch: ['M4 5v6', 'M4 9c0-4 8-1 8-5', 'M4 2a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3', 'M4 11a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3', 'M12 1a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3'],
     copy: ['M6 6V3.5h7.5V11H11', 'M2.5 6H10v6.5H2.5z'],

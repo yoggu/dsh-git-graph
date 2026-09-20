@@ -119,6 +119,7 @@ export function GraphView({ tabInfo, sessionId }) {
   // or announce itself as history being read.
   const [checking, setChecking] = React.useState(false)
   const [fetching, setFetching] = React.useState(false)
+  const [pruning, setPruning] = React.useState(false)
   const [readAt, setReadAt] = React.useState(null)
   const [revision, setRevision] = React.useState(0)
   // Which branch's history is shown, and what is being searched for. The first
@@ -253,10 +254,21 @@ export function GraphView({ tabInfo, sessionId }) {
     loadState()
     setRevision(value => value + 1)
   }, [flash, load, loadWorking, loadState])
-  const fetchRemotes = React.useCallback(async () => {
-    setFetching(true)
+  /**
+   * Fetch from every remote.
+   *
+   * Pruning is a separate button rather than a hidden modifier: it deletes
+   * remote-tracking refs, which is a different promise from "tell me what the
+   * remote has", and a reader who wants it should be able to say so with one
+   * press and see it named in the report afterwards.
+   *
+   * @param prune - whether to remove remote-tracking refs the remote no longer has.
+   */
+  const fetchRemotes = React.useCallback(async (prune = false) => {
+    if (prune) setPruning(true)
+    else setFetching(true)
     try {
-      const result = await call({ op: 'fetch', sessionId, prune: false }, signal)
+      const result = await call({ op: 'fetch', sessionId, prune }, signal)
       if (signal.aborted) return
       if (typeof result.error === 'string' && result.error.length > 0) setError(describeFetch(result))
       else {
@@ -269,7 +281,7 @@ export function GraphView({ tabInfo, sessionId }) {
       setRevision(value => value + 1)
     } catch (err) {
       if (err.name !== 'AbortError') setError(String(err.message ?? err))
-    } finally { setFetching(false) }
+    } finally { setFetching(false); setPruning(false) }
   }, [sessionId, signal, load, loadWorking, loadState])
   React.useEffect(() => { load(); loadWorking(); loadState(); return () => { request.current += 1; clearTimeout(noticeTimer.current) } }, [sessionId, signal])
   // The push channel needs no indicator of its own: an arrival shows up as a
@@ -427,9 +439,16 @@ export function GraphView({ tabInfo, sessionId }) {
             className: 'gg-icon-btn gg-column-btn',
             'aria-label': 'Fetch from remotes',
             title: `Fetch from ${state.refs.remotes.join(', ')} — updates remote-tracking branches only`,
-            disabled: fetching,
-            onClick: fetchRemotes,
+            disabled: fetching || pruning,
+            onClick: () => fetchRemotes(false),
           }, fetching ? h('span', { className: 'gg-spinner', 'aria-hidden': 'true' }) : h(GitIcon, { name: 'download', size: 13 })) : null,
+          (state.refs?.remotes?.length ?? 0) > 0 ? h('button', {
+            className: 'gg-icon-btn gg-column-btn',
+            'aria-label': 'Fetch and prune remote-tracking branches',
+            title: `Fetch from ${state.refs.remotes.join(', ')} and remove the remote-tracking branches the remote no longer has`,
+            disabled: fetching || pruning,
+            onClick: () => fetchRemotes(true),
+          }, pruning ? h('span', { className: 'gg-spinner', 'aria-hidden': 'true' }) : h(GitIcon, { name: 'prune', size: 13 })) : null,
           ),
         h('span', null, 'Description'), h('span', null, 'Date'), h('span', null, 'Author'), h('span', null, 'Commit')),
       filterBar,

@@ -377,6 +377,24 @@ try {
   await frame()
   check('Fetch discovers a branch that only the remote had', await page.locator('.gg-ref-name', { hasText: 'origin/remote-only' }).count() >= 1)
   check('The fetch reports what it found', /new branch/.test(await page.locator('.gg-notice').innerText()))
+  // Pruning is its own button because it promises something different: it
+  // removes remote-tracking refs the remote no longer has. The fixture holds
+  // one such ref on purpose (`origin/dev`), so the report has something to say.
+  const pruning = page.getByRole('button', { name: 'Fetch and prune remote-tracking branches' })
+  check('A second fetch button offers to prune', await pruning.count() === 1)
+  check('The prune button says what it removes', /no longer has/.test(await pruning.getAttribute('title')))
+  await pruning.click()
+  await page.waitForFunction(() => /deleted/.test(document.querySelector('.gg-notice')?.textContent ?? ''), null, { timeout: 10000 })
+  check('Pruning fetches and reports the refs it removed', /1 deleted/.test(await text('.gg-notice')))
+  // `requests` is recorded on this side of the wire, not in the page.
+  check('Pruning sent the flag the host reads', requests.some(request => request.op === 'fetch' && request.prune === true))
+  // The report is flashed before the refs are re-read, so the badge is awaited
+  // rather than sampled.
+  const prunedGone = await page.waitForFunction(
+    () => ![...document.querySelectorAll('.gg-ref-remote')].some(node => node.textContent.includes('origin/dev')),
+    null, { timeout: 8000 },
+  ).then(() => true).catch(() => false)
+  check('The pruned remote-tracking branch is gone from the graph', prunedGone)
   check('A fetch leaves the working tree and HEAD alone', execFileSync('git', ['status', '--porcelain=v2'], { cwd: dir, encoding: 'utf8' }) === worktreeBefore && execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).trim() === headBefore)
   await screenshot('fetch-discovers-branch.png')
 

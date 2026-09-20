@@ -34,11 +34,14 @@ outside that sidebar.
 - **Refresh** re-reads history and working tree by hand; a background refresh
   keeps your scroll position, your open accordion and the loaded depth, and only
   re-renders when something the rows draw actually changed.
-- **Fetch** pulls every configured remote (`git fetch --all`, tags included). It
-  is the one toolbar button that touches the network, it appears only when a
-  remote exists, and it updates remote-tracking branches only — the working tree,
-  the index, HEAD and your local branches are untouched. Push and pull live in a
-  branch's own menu, where they are confirmed like every other writing action.
+- **Fetch** pulls every configured remote (`git fetch --all`, tags included). The
+  toolbar's network buttons appear only when a remote exists, and both update
+  remote-tracking branches only — the working tree, the index, HEAD and your
+  local branches are untouched. The second one **fetches and prunes**: it also
+  removes the remote-tracking refs the remote no longer has, which is a
+  different promise and therefore its own button rather than a hidden modifier.
+  Push and pull live in a branch's own menu, where they are confirmed like every
+  other writing action.
 - **Every stash is in the graph**, not just the newest one. Only the newest is
   `refs/stash`; the older ones live in that ref's reflog, so the host names each
   of them as a starting point of the traversal and the badge shows the position
@@ -200,7 +203,7 @@ HTTP server, logged-in profile or DSH restart is needed. All scenarios run
 against a temporary repository that the test creates and removes; nothing of
 yours is read or written unless you ask for it.
 
-75 checks run out of the box. Setting `GRAPH_TEST_REPO` to a repository with a
+80 checks run out of the box. Setting `GRAPH_TEST_REPO` to a repository with a
 large branching history adds 3 more that exercise real lane routing and real
 working-tree reads on that history, which is only ever read.
 
