@@ -49,31 +49,65 @@ export function parseRef(ref, remotes) {
  * Git reports a local branch and each remote-tracking branch as separate
  * tokens. Printing them all produces several pills that mostly repeat one
  * name — `main`, `origin/main`, `upstream/main` — and pushes the subject out
- * of the row. One badge per branch, naming its remotes, says the same thing
- * in the space of one.
+ * of the row.
+ *
+ * A remote-tracking branch that still sits on its local branch's commit says
+ * nothing the local branch has not already said, so it rides along inside that
+ * branch's badge as the remote's name. One that has drifted sits on another
+ * commit with no local branch of that name beside it, and therefore keeps its
+ * own full-name badge — which is the only case where `origin/…` is worth the
+ * space. This mirrors VS Code Git Graph's combined local/remote labels.
  *
  * @param refs - the row's decoration tokens.
+ * @param remotes - the configured remote names, which decide where a
+ *   remote-tracking name stops being a remote and starts being a branch.
  * @returns one entry per distinct branch, tag or detached HEAD.
  */
 export function groupRefs(refs, remotes) {
   const priority = { head: 0, branch: 1, remote: 2, tag: 3, detached: 4 }
-  const seen = new Set()
-  return refs.map(ref => {
-    const parsed = parseRef(ref, remotes)
-    const text = parsed.kind === 'remote' && parsed.remote ? `${parsed.remote}/${parsed.label}` : parsed.label
-    return {
-      key: `${parsed.kind}:${text}`,
-      kind: parsed.kind,
-      text,
-      title: parsed.kind === 'head' ? `HEAD is at ${text}` : parsed.kind === 'tag' ? `tag ${text}` : text,
+  const parsed = refs.map(ref => parseRef(ref, remotes))
+  const entries = []
+  // Local branches, indexed by the name a remote-tracking branch would carry.
+  const local = new Map()
+  const simple = (ref, title) => ({
+    key: `${ref.kind}:${ref.label}`,
+    kind: ref.kind,
+    text: ref.label,
+    title,
+    remotes: [],
+  })
+  for (const ref of parsed) {
+    if (ref.kind !== 'head' && ref.kind !== 'branch') continue
+    const entry = simple(ref, ref.kind === 'head' ? `HEAD is at ${ref.label}` : ref.label)
+    if (!local.has(ref.label)) local.set(ref.label, entry)
+    entries.push(entry)
+  }
+  for (const ref of parsed) {
+    if (ref.kind === 'tag') { entries.push(simple(ref, `tag ${ref.label}`)); continue }
+    if (ref.kind === 'detached') { entries.push(simple(ref, ref.label)); continue }
+    if (ref.kind !== 'remote') continue
+    const text = `${ref.remote}/${ref.label}`
+    const host = local.get(ref.label)
+    if (host !== undefined) {
+      if (!host.remotes.some(remote => remote.name === ref.remote)) {
+        host.remotes.push({ name: ref.remote, full: text })
+      }
+      continue
     }
-  }).filter(ref => ref.text !== 'HEAD' || ref.kind !== 'remote')
-    .filter(ref => seen.has(ref.key) ? false : (seen.add(ref.key), true))
+    entries.push({ key: `remote:${text}`, kind: 'remote', text, title: text, remotes: [] })
+  }
+  const seen = new Set()
+  return entries.filter(entry => seen.has(entry.key) ? false : (seen.add(entry.key), true))
     .sort((a, b) => (priority[a.kind] ?? 9) - (priority[b.kind] ?? 9))
 }
 
 /**
  * Render the per-commit badges a graph row wears.
+ *
+ * A badge that absorbed its remote-tracking branches shows each remote's name
+ * after the branch name, separated by a rule and italicised — the same shape VS
+ * Code Git Graph uses, so `main` next to a remote reads as one branch that is
+ * in sync rather than as two branches that happen to share a name.
  *
  * @param refs - the row's already-grouped badges.
  * @returns the badge elements.
@@ -84,7 +118,13 @@ export function RefBadges({ refs }) {
     key: ref.key,
     className: `gg-ref gg-ref-${ref.kind}`,
     title: ref.title,
-  }, h('span', { className: 'gg-ref-icon' }, h(GitIcon, { name: 'branch', size: 13 })), h('span', { className: 'gg-ref-name' }, ref.text))))
+  }, h('span', { className: 'gg-ref-icon' }, h(GitIcon, { name: 'branch', size: 13 })),
+  h('span', { className: 'gg-ref-name' }, ref.text),
+  ...ref.remotes.map(remote => h('span', {
+    key: remote.full,
+    className: 'gg-ref-remote-name',
+    title: remote.full,
+  }, remote.name)))))
 }
 
 // BEGIN GRAPH CANVAS

@@ -11,6 +11,9 @@ outside that sidebar.
 
 - History is a full-width graph table with **Description**, **Date**, **Author**,
   and short **Commit** columns.
+- A branch that still agrees with its remote-tracking branch wears one badge
+  naming both — `main` with an italic `origin` — so `origin/main` only gets its
+  own full-name badge once it has drifted onto a commit of its own.
 - When the worktree is dirty, a grey **Uncommitted changes (n)** row appears above
   the commits. A partially staged path counts once in `n`, while its staged and
   unstaged changes remain separate entries.
@@ -126,9 +129,9 @@ HTTP server, logged-in profile or DSH restart is needed. All scenarios run
 against a temporary repository that the test creates and removes; nothing of
 yours is read or written unless you ask for it.
 
-35 checks run out of the box. Setting `GRAPH_TEST_REPO` to a repository with a
-large branching history adds 8 more that exercise real lane routing, pagination
-and merge details on that history, which is only ever read.
+38 checks run out of the box. Setting `GRAPH_TEST_REPO` to a repository with a
+large branching history adds 3 more that exercise real lane routing and real
+working-tree reads on that history, which is only ever read.
 
 Together they cover dark/light and 400px/1440px layouts, computed status colors,
 actual screenshot pixels for graph hover/selection, syntax toggling, escaped

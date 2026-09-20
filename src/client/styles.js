@@ -188,7 +188,16 @@ export const CSS = `
 .gg-ref { display: inline-flex; flex: 0 1 auto; min-width: 0; height: 20px; border-radius: 4px; line-height: 18px; white-space: nowrap; overflow: hidden; max-width: 210px; background: rgba(128,128,128,.15); border: 1px solid rgba(128,128,128,.7); }
 .gg-ref-icon { display: inline-flex; align-items: center; justify-content: center; width: 19px; flex: none; margin: -1px 0 -1px -1px; color: var(--dsw-alias-bg-base); background: var(--gg-ref-color); }
 .gg-ref-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 0 5px; color: var(--dsw-alias-label-primary); font-size: var(--dsh-content-font-size-secondary, 13px); }
-.gg-ref-head { border-color: var(--gg-ref-color); font-weight: 600; }
+/* The remote a branch is in sync with: same pill, one italic segment further.
+   The branch name identifies the commit, so this segment yields its space first
+   — it shrinks hard and is clipped, and only once it is spent does the name
+   start ellipsizing. */
+.gg-ref-remote-name { flex: 0 100 auto; min-width: 0; overflow: hidden; padding: 0 5px;
+  border-left: 1px solid rgba(128,128,128,.45);
+  font-style: italic; color: var(--dsw-alias-label-primary);
+  font-size: var(--dsh-content-font-size-secondary, 13px); }
+.gg-ref-head { border-color: var(--gg-ref-color); }
+.gg-ref-head .gg-ref-name { font-weight: 600; }
 .gg-ref-head .gg-ref-icon { color: white; }
 .gg-history-status { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 30px; padding: 2px 10px 8px; color: var(--dsw-alias-label-secondary); font-size: var(--dsh-content-font-size-secondary, 13px); }
 .gg-spinner { box-sizing: border-box; width: 12px; height: 12px; flex: none; border: 1.5px solid color-mix(in srgb, currentColor 30%, transparent); border-top-color: currentColor; border-radius: 50%; animation: gg-spin .75s linear infinite; }

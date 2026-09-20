@@ -28,6 +28,11 @@ await put('src/components/added.py', 'def greet(name):\n    return "Hello " + na
 await put('image.bin', Buffer.from([0, 9, 8, 7])); await rm(join(dir, 'deleted.py')); git('add', '-A'); git('commit', '-qm', 'Review multiple statuses')
 await put('app.ts', 'export const total = 50;\n// staged\n'); git('add', 'app.ts')
 await put('app.ts', 'export const total = 60;\n// unstaged\n'); await put('untracked.txt', 'Untracked content\n')
+// One remote-tracking branch that agrees with its local branch, and one that has
+// drifted onto a commit where no local branch of that name exists.
+git('remote', 'add', 'origin', 'https://example.invalid/dsh-git-graph.git')
+git('update-ref', 'refs/remotes/origin/main', git('rev-parse', 'HEAD'))
+git('update-ref', 'refs/remotes/origin/dev', git('rev-parse', 'HEAD~1'))
 const realRepo = process.env.GRAPH_TEST_REPO || ''
 const realBefore = realRepo ? execFileSync('git', ['-C', realRepo, 'status', '--porcelain=v2'], { encoding: 'utf8' }) : ''
 const testCtx = { get(name) { return name === 'sessions' ? { get(id) { return { header: { cwd: id === 'history' && realRepo ? realRepo : dir } } } } : undefined } }
@@ -99,6 +104,14 @@ try {
 
   const commitRow = rows.nth(1)
   check('Branch labels precede commit messages without overlay positioning', await commitRow.locator('.gg-description').evaluate(e => e.firstElementChild?.classList.contains('gg-refs') && getComputedStyle(e).display === 'flex' && getComputedStyle(e).position === 'static'))
+  // `main` and `origin/main` sit on this commit; `origin/dev` has drifted onto the
+  // commit below, where no local `dev` exists.
+  check('A branch in sync with its remote folds the remote into one badge', await commitRow.locator('.gg-ref').count() === 1
+    && await commitRow.locator('.gg-ref-head .gg-ref-name').innerText() === 'main'
+    && await commitRow.locator('.gg-ref-head .gg-ref-remote-name').innerText() === 'origin'
+    && await commitRow.locator('.gg-ref-remote-name').evaluate(e => getComputedStyle(e).fontStyle) === 'italic')
+  check('A drifted remote-tracking branch keeps its own full-name badge', await rows.nth(2).locator('.gg-ref-remote .gg-ref-name').innerText() === 'origin/dev')
+  await screenshot('refs-combined-remote.png')
   delayNextCommit = true
   await commitRow.click()
   const loadingAccordion = page.locator('.gg-accordion-state[aria-label="Loading commit details"]')
@@ -158,6 +171,11 @@ try {
   await waitGraph(); await waitAccordion('Uncommitted changes')
   check('Returning from a working diff restores the uncommitted accordion', await page.locator('.gg-row[aria-expanded="true"]').count() === 1)
   await page.setViewportSize({ width: 420, height: 900 }); await frame()
+  const squeezed = await commitRow.locator('.gg-ref-head').evaluate(e => {
+    const name = e.querySelector('.gg-ref-name'), remote = e.querySelector('.gg-ref-remote-name')
+    return { name: name.clientWidth / name.scrollWidth, remote: remote.clientWidth / remote.scrollWidth }
+  })
+  check('When space runs out the remote segment yields before the branch name', squeezed.remote < 0.4 && squeezed.name > 0.7)
   check('Narrow history hides lower-priority Author and Commit columns', await page.locator('.gg-column-heading span').nth(3).evaluate(e => getComputedStyle(e).display === 'none') && await page.locator('.gg-column-heading span').nth(4).evaluate(e => getComputedStyle(e).display === 'none'))
   await page.locator('.gg-row').nth(1).click(); await waitAccordion('Commit details')
   check('Narrow accordion stacks the 50/50 detail columns', await page.locator('.gg-accordion').evaluate(e => getComputedStyle(e).gridTemplateColumns.split(' ').length === 1 && e.scrollWidth <= e.clientWidth))
