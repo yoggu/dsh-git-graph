@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Git Graph",
+    "description": "Git history and working-tree changes in the DSH web right sidebar: a commit graph, per-commit details, and a diff view for past commits and uncommitted work."
+  }
+}
