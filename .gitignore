@@ -1,2 +1,9 @@
 node_modules
 test-artifacts/
+.env
+.env.*
+*.credentials.yaml
+credentials*.json
+*.pem
+*.key
+*.log

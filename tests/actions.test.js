@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { internals } from '../lib/index.js'
@@ -493,6 +493,27 @@ test('the commits operation reports and applies the filter through dispatch', as
   }
 })
 
+test('destructive file actions treat Git pathspec magic as a literal filename', async () => {
+  const { root, cleanup } = fixture()
+  const magic = ':(top)**'
+  try {
+    writeFileSync(join(root, magic), 'magic\n')
+    git(root, '-c', 'literal.pathspecs=true', 'add', '--', magic)
+    git(root, 'commit', '-qm', 'Add literal magic filename')
+    writeFileSync(join(root, 'a.txt'), 'modified\n')
+    writeFileSync(join(root, magic), 'modified magic\n')
+    await internals.runAction(root, { action: 'working.discard', params: { paths: [magic] } })
+    assert.equal(git(root, 'status', '--porcelain', '--', 'a.txt'), 'M a.txt',
+      'discarding the magic-looking path must not discard another file')
+    assert.equal(readFileSync(join(root, magic), 'utf8'), 'magic\n', 'the literal file was restored')
+    await internals.runAction(root, { action: 'working.remove', params: { paths: [magic] } })
+    assert.equal(existsSync(join(root, magic)), false)
+    assert.equal(existsSync(join(root, 'a.txt')), true)
+  } finally {
+    cleanup()
+  }
+})
+
 test('a file git does not track is deleted rather than restored', async () => {
   const { root, cleanup } = fixture()
   try {
@@ -875,51 +896,46 @@ test('revert and cherry-pick really change the tree they act on', async () => {
   }
 })
 
-test('routes are released with the plugin, so a second apply cannot collide', () => {
-  // `register` returns the disposer, and a duplicate (kind, path) throws — so an
-  // apply that keeps no disposer makes the *next* apply fail while the first
-  // one's routes keep serving. That is a plugin that reports itself broken and
-  // answers every request from a stale generation.
+test('only authenticated Connection Fetch routes are installed and released', async () => {
   const registered = []
   const context = {
-    webServer: {
-      register(route) {
-        if (registered.some(entry => entry.kind === route.kind && entry.path === route.path)) {
-          throw new Error(`duplicate route ${route.kind} ${route.path}`)
-        }
-        registered.push(route)
-        return () => {
-          const at = registered.indexOf(route)
-          if (at >= 0) registered.splice(at, 1)
-        }
+    connection: {
+      fetch: {
+        register(route) {
+          if (registered.some(entry => entry.path === route.path)) throw new Error(`duplicate route ${route.path}`)
+          registered.push(route)
+          return async () => {
+            const at = registered.indexOf(route)
+            if (at >= 0) registered.splice(at, 1)
+          }
+        },
       },
     },
   }
   const release = internals.registerRoutes(context)
-  assert.deepEqual(registered.map(route => route.path), ['/api/dsh-git-graph', '/api/dsh-git-graph/events'])
-
-  // Applying again while the first is live is the collision the row would hit.
+  assert.deepEqual(registered.map(({ path, methods, requestBody }) => ({ path, methods, requestBody })), [
+    { path: '/api/dsh-git-graph', methods: ['POST'], requestBody: 'buffered' },
+    { path: '/api/dsh-git-graph/events', methods: ['GET'], requestBody: 'buffered' },
+  ])
   assert.throws(() => internals.registerRoutes(context), /duplicate route/)
-
-  release()
-  assert.deepEqual(registered, [], 'releasing ends the registration')
-  // …and once released, the same row can be applied again, which is exactly
-  // what a reload or a disable-and-enable does.
+  await release()
+  assert.deepEqual(registered, [])
   const again = internals.registerRoutes(context)
   assert.equal(registered.length, 2)
-  again()
+  await again()
   assert.equal(registered.length, 0)
 
-  // A half-finished apply must not leave its first route behind either.
   const failing = {
-    webServer: {
-      register(route) {
-        if (route.path === '/api/dsh-git-graph/events') throw new Error('collision')
-        registered.push(route)
-        return () => { registered.splice(registered.indexOf(route), 1) }
+    connection: {
+      fetch: {
+        register(route) {
+          if (route.path.endsWith('/events')) throw new Error('collision')
+          registered.push(route)
+          return async () => { registered.splice(registered.indexOf(route), 1) }
+        },
       },
     },
   }
   assert.throws(() => internals.registerRoutes(failing), /collision/)
-  assert.deepEqual(registered, [], 'the route registered before the failure is released')
+  assert.deepEqual(registered, [], 'a half-finished apply releases its first route')
 })

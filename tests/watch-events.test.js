@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { internals } from '../lib/index.js'
+import { internals, registerRoutes, ROUTE_PATH, EVENTS_PATH } from '../lib/index.js'
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -31,6 +31,61 @@ function tempRepo() {
   git('branch', '-M', 'main')
   return { dir, git }
 }
+
+test('authenticated Fetch handlers preserve session context and release SSE watchers on abort', async () => {
+  const { dir } = tempRepo()
+  const routes = new Map()
+  const ctx = {
+    get: name => name === 'sessions' ? new Map([['own-session', { header: { cwd: dir } }]]) : undefined,
+    connection: { fetch: { register(route) {
+      routes.set(route.path, route)
+      return async () => { routes.delete(route.path) }
+    } } },
+  }
+  const release = registerRoutes(ctx)
+  try {
+    const post = routes.get(ROUTE_PATH)
+    const events = routes.get(EVENTS_PATH)
+    assert.equal(post.methods[0], 'POST')
+    assert.equal(events.methods[0], 'GET')
+    assert.equal(ctx.webServer, undefined, 'no raw WebServer route is required')
+
+    const result = await post.fetch(new Request(`http://localhost${ROUTE_PATH}`, {
+      method: 'POST', body: JSON.stringify({ op: 'working', sessionId: 'own-session' }),
+    }))
+    assert.equal(result.status, 200)
+    assert.equal((await result.json()).ok, true)
+    assert.equal(result.headers.get('cache-control'), 'no-store')
+
+    const unknown = await post.fetch(new Request(`http://localhost${ROUTE_PATH}`, {
+      method: 'POST', body: JSON.stringify({ op: 'working', sessionId: 'other-session' }),
+    }))
+    assert.match((await unknown.json()).error, /unknown or expired Session/)
+    const invalid = await post.fetch(new Request(`http://localhost${ROUTE_PATH}`, {
+      method: 'POST', body: '[1]',
+    }))
+    assert.equal(invalid.status, 400)
+
+    const denied = await events.fetch(new Request(`http://localhost${EVENTS_PATH}?sessionId=other-session`))
+    assert.match((await denied.json()).error, /unknown or expired Session/)
+    const abort = new AbortController()
+    const stream = await events.fetch(new Request(`http://localhost${EVENTS_PATH}?sessionId=own-session`, {
+      signal: abort.signal,
+    }))
+    assert.equal(stream.headers.get('content-type'), 'text/event-stream; charset=utf-8')
+    const reader = stream.body.getReader()
+    const first = new TextDecoder().decode((await reader.read()).value)
+    assert.match(first, /connected/)
+    assert.equal(internals.watchedDirectories().length, 1)
+    abort.abort()
+    assert.deepEqual(internals.watchedDirectories(), [], 'disconnect releases the watcher')
+    await reader.cancel()
+  } finally {
+    await release()
+    rmSync(dir, { recursive: true, force: true })
+  }
+  assert.equal(routes.size, 0)
+})
 
 test('only a ref-worthy path inside the Git directory wakes the browser', () => {
   for (const path of ['HEAD', 'index', 'packed-refs', 'config', 'ORIG_HEAD', 'MERGE_HEAD', 'FETCH_HEAD', 'refs/heads/main', 'refs/remotes/origin/main', 'refs/tags/v1', 'refs/stash']) {

@@ -21,6 +21,7 @@
     "client.js",
     "cordis.patch.yml",
     "README.md",
+    "LICENSE",
     "THIRD_PARTY_NOTICES.md",
     "icon.svg",
     "locale"

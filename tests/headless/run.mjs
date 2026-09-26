@@ -90,8 +90,20 @@ const server = createServer(async (req, res) => {
     // The shipped handler, not a copy of it: this is the route apply() registers.
     openStreams += 1
     req.on('close', () => { openStreams -= 1 })
-    try { await internals.openEvents(testCtx, req, res) }
-    catch (error) { if (!res.headersSent) { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: false, error: error.message })) } else res.end() }
+    const controller = new AbortController()
+    res.on('close', () => controller.abort())
+    try {
+      const response = await internals.openEvents(testCtx, new Request(address, { signal: controller.signal }))
+      res.writeHead(response.status, Object.fromEntries(response.headers))
+      if (response.body === null) res.end()
+      else {
+        for await (const chunk of response.body) {
+          if (controller.signal.aborted) break
+          res.write(chunk)
+        }
+        res.end()
+      }
+    } catch (error) { if (!res.headersSent) { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: false, error: error.message })) } else res.end() }
     return
   }
   const body = address.pathname === '/fixture.js' ? fixtureJS : address.pathname === '/client.js' ? client : html
