@@ -2,11 +2,24 @@
 
 A Git graph in the right sidebar of DSH Web. Browse commits, branches, tags and stashes, inspect staged/unstaged changes and diffs, compare revisions, and perform selected Git actions through confirmation dialogs. Changes to the Git directory update the view automatically while it is open.
 
-## Install from GitHub
+## Install
+
+Install the tagged GitHub release into your DSH Web profile:
 
 ```sh
-dsh plugin --profile web add https://github.com/yoggu/dsh-git-graph.git
+dsh plugin --profile web add 'https://github.com/yoggu/dsh-git-graph.git#v0.1.1'
 ```
+
+Or download the source and link the local checkout. The browser bundle (`client.js`) is already included; no build is needed to install it:
+
+```sh
+git clone --branch v0.1.1 --depth 1 https://github.com/yoggu/dsh-git-graph.git
+cd dsh-git-graph
+npm install --omit=dev --ignore-scripts
+dsh plugin --profile web add "link:$(pwd)"
+```
+
+Keep a linked checkout in place while the plugin is installed. Use the profile you actually run if it is not `web`.
 
 Restart DSH Web if necessary, reload the page, then select **Git graph** from the right sidebar's tab menu. No API key is required. The installed package includes the built browser bundle (`client.js`).
 
