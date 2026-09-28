@@ -1,6 +1,6 @@
 {
   "name": "dsh-git-graph",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Git history and working-tree changes in the DSH web right sidebar: a commit graph, per-commit details, and a diff view for both past commits and an agent's uncommitted work",
   "icon": "./icon.svg",
@@ -43,7 +43,8 @@
     "test:live": "node scripts/smoke-live.mjs"
   },
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=22.19.0",
+    "dsh": "^0.1.7-rc.2 || ^0.2.0-rc.1"
   },
   "dependencies": {
     "highlight.js": "11.11.1"

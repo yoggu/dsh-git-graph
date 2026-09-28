@@ -7,13 +7,13 @@ A Git graph in the right sidebar of DSH Web. Browse commits, branches, tags and 
 Install the tagged GitHub release into your DSH Web profile:
 
 ```sh
-dsh plugin --profile web add 'https://github.com/yoggu/dsh-git-graph.git#v0.1.1'
+dsh plugin --profile web add 'https://github.com/yoggu/dsh-git-graph.git#v0.1.2'
 ```
 
 Or download the source and link the local checkout. The browser bundle (`client.js`) is already included; no build is needed to install it:
 
 ```sh
-git clone --branch v0.1.1 --depth 1 https://github.com/yoggu/dsh-git-graph.git
+git clone --branch v0.1.2 --depth 1 https://github.com/yoggu/dsh-git-graph.git
 cd dsh-git-graph
 npm install --omit=dev --ignore-scripts
 dsh plugin --profile web add "link:$(pwd)"
