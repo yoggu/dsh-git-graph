@@ -608,6 +608,9 @@ test('every action a menu can offer is one the host can plan', async () => {
 
 test('an action queued behind another re-checks the repository before it runs', async () => {
   const { root, cleanup } = fixture()
+  const running = []
+  let release
+  let held
   try {
     git(root, 'tag', 'victim')
     git(root, 'checkout', '-q', '-b', 'feature')
@@ -617,24 +620,48 @@ test('an action queued behind another re-checks the repository before it runs', 
     writeFileSync(join(root, 'a.txt'), 'main\n')
     git(root, 'commit', '-qam', 'Main')
 
-    // The queue is held so that both actions pass their state check before
-    // either runs. That window is the whole point: a merge started in it must
-    // still stop the action queued behind it, which is a fact about the
-    // repository at the moment it runs, not at the moment it was requested.
-    let release
-    const held = internals.queueWrite(root, () => new Promise(resolve => { release = resolve }))
-    const merging = internals.runAction(root, { action: 'branch.merge', params: { name: 'feature' } })
-    const deleting = internals.runAction(root, { action: 'tag.delete', params: { name: 'victim' } })
-    await new Promise(resolve => setTimeout(resolve, 50))
+    // runAction validates asynchronously before joining the write queue, so
+    // invocation order (or a sleep) cannot establish enqueue order. Observe the
+    // actual queue tail instead, without mocking Git or changing either action.
+    async function enqueue(request) {
+      const previous = internals.writeQueues.get(root)
+      const action = internals.runAction(root, request)
+      running.push(action)
+      let validationError
+      action.catch(error => { validationError = error })
+      const deadline = performance.now() + 5_000
+      while (internals.writeQueues.get(root) === previous) {
+        if (validationError) throw validationError
+        assert.ok(performance.now() < deadline, `${request.action} did not join the held queue`)
+        await new Promise(resolve => setTimeout(resolve, 1))
+      }
+      return { action }
+    }
+
+    // Both initial checks see a clean repository, but merge is guaranteed to
+    // enter the held queue first. Only the in-queue re-check can stop deletion.
+    const started = new Promise(resolve => {
+      held = internals.queueWrite(root, () => new Promise(unblock => {
+        release = unblock
+        resolve()
+      }))
+    })
+    await started
+    const { action: merging } = await enqueue({ action: 'branch.merge', params: { name: 'feature' } })
+    const { action: deleting } = await enqueue({ action: 'tag.delete', params: { name: 'victim' } })
     release()
     const [merged, deleted] = await Promise.allSettled([merging, deleting])
     await held
 
     assert.equal(merged.status, 'rejected', 'the merge conflicts, as the fixture intends')
+    assert.match(merged.reason.message, /CONFLICT|conflict|Automatic merge failed/)
     assert.equal(deleted.status, 'rejected', 'a tag must not be deleted while a merge is half-finished')
     assert.match(deleted.reason.message, /merge is in progress/)
     assert.equal(git(root, 'tag', '--list', 'victim'), 'victim')
   } finally {
+    release?.()
+    await Promise.allSettled(running)
+    if (held) await held
     cleanup()
   }
 })

@@ -7,7 +7,7 @@ import { CompactDropdown, GitIcon } from './ui.js'
 const h = React.createElement
 
 /** Shared inline or standalone diff. Optional params.group identifies untracked files. */
-export function DiffPanel({ sessionId, signal, params = {}, revision = 0 }) {
+export function DiffPanel({ sessionId, signal, params = {}, target = params.target, repositoryLabel = params.repositoryLabel, revision = 0 }) {
   const [wrap, setWrap] = React.useState(true)
   const [context, setContext] = React.useState(3)
   const [syntax, setSyntax] = React.useState(true)
@@ -24,7 +24,7 @@ export function DiffPanel({ sessionId, signal, params = {}, revision = 0 }) {
   const oldPath = typeof params.oldPath === 'string' ? params.oldPath : undefined
   const untracked = mode === 'working' && params.group === 'untracked'
   const staged = params.staged === true
-  const key = JSON.stringify([sessionId, mode, path, oldPath, params.base, params.head, staged, untracked, context, revision, retry])
+  const key = JSON.stringify([sessionId, target, mode, path, oldPath, params.base, params.head, staged, untracked, context, revision, retry])
   React.useEffect(() => {
     const controller = new AbortController()
     let active = true
@@ -38,8 +38,8 @@ export function DiffPanel({ sessionId, signal, params = {}, revision = 0 }) {
     const cleanup = () => { active = false; controller.abort(); signal?.removeEventListener('abort', abort) }
     if (untracked || !path || controller.signal.aborted) return cleanup
     const request = mode === 'working'
-      ? { op: 'workingDiff', sessionId, path, oldPath, staged, context }
-      : { op: 'diff', sessionId, from: params.base, to: params.head, path, oldPath, context }
+      ? { op: 'workingDiff', sessionId, target, path, oldPath, staged, context }
+      : { op: 'diff', sessionId, target, from: params.base, to: params.head, path, oldPath, context }
     call(request, controller.signal).then(result => {
       if (active && !controller.signal.aborted) setState({ key, status: 'ready', patch: String(result.patch ?? ''), truncated: result.truncated === true })
     }).catch(error => {
@@ -114,7 +114,7 @@ export function DiffPanel({ sessionId, signal, params = {}, revision = 0 }) {
     layout === 'split' ? splitPatch : unifiedPatch,
     cut ? h('div', { className: 'gg-du-message', role: 'status' }, 'Partial diff: output reached the host or display limit. Counts describe only the returned patch.') : null)
   return h('section', { ref: panelRef, className: 'gg-du-panel', 'aria-label': title ? `Diff for ${title}` : 'Diff preview' },
-    h('div', { className: 'gg-du-title', title }, title || 'Diff preview'),
+    h('div', { className: 'gg-du-title', title }, repositoryLabel ? `${repositoryLabel} · ${title || 'Diff preview'}` : title || 'Diff preview'),
     h('div', { className: 'gg-du-controls' },
       h('button', { type: 'button', className: 'gg-du-button gg-du-icon-button', 'aria-label': 'Toggle word wrap', title: wrap ? 'Disable word wrap' : 'Enable word wrap', 'aria-pressed': wrap, onClick: () => setWrap(value => !value) }, h(GitIcon, { name: 'wrap', size: 14 })),
       h(CompactDropdown, { className: 'gg-du-layout-select', value: layoutMode, onChange: setLayoutMode, label: 'Diff layout', title: 'Diff layout', options: [{ value: 'auto', label: 'Auto view' }, { value: 'split', label: 'Side by side' }, { value: 'unified', label: 'Inline' }] }),

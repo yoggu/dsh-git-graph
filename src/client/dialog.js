@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { initialValues, missingFields, paramsFor } from './actions.js'
 import { call } from './api.js'
+import { snapshotRepositoryScope } from './files.js'
 import { CompactDropdown } from './ui.js'
 
 const h = React.createElement
@@ -62,7 +63,9 @@ export function describeState(state) {
  * @param props - the action request, the session, and what to do on success.
  * @returns the dialog element.
  */
-export function ActionDialog({ request, sessionId, signal, onClose, onDone }) {
+export function ActionDialog({ request, sessionId, target, repositoryLabel, signal, onClose, onDone, onRunningChange }) {
+  // Confirmation belongs to the repository where it opened, not a later selector value.
+  const [origin] = React.useState(() => ({ sessionId, ...snapshotRepositoryScope({ target, repositoryLabel }) }))
   const [values, setValues] = React.useState(() => initialValues(request))
   // The plan and the parameters it was made for. A plan that belongs to an
   // earlier keystroke must not be shown next to the command that would run
@@ -71,16 +74,17 @@ export function ActionDialog({ request, sessionId, signal, onClose, onDone }) {
   const [planError, setPlanError] = React.useState(null)
   const [runError, setRunError] = React.useState(null)
   const [running, setRunning] = React.useState(false)
+  const runningRef = React.useRef(false)
   const firstField = React.useRef(null)
 
   const missing = missingFields(request, values)
   const params = paramsFor(request, values)
   // The plan is re-read whenever the parameters change, so the command shown is
   // always the command that would run — never the one from a previous keystroke.
-  const paramsKey = JSON.stringify(params)
+  const paramsKey = JSON.stringify([origin.sessionId, origin.target, request.action, params])
 
   React.useEffect(() => {
-    const onKey = event => { if (event.key === 'Escape') onClose() }
+    const onKey = event => { if (event.key === 'Escape' && !runningRef.current) onClose() }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
@@ -94,7 +98,7 @@ export function ActionDialog({ request, sessionId, signal, onClose, onDone }) {
       return undefined
     }
     let active = true
-    call({ op: 'plan', sessionId, action: request.action, params }, signal)
+    call({ op: 'plan', sessionId: origin.sessionId, target: origin.target, action: request.action, params }, signal)
       .then(result => { if (active) { setPlanned({ key: paramsKey, result }); setPlanError(null) } })
       .catch(error => {
         if (active && error.name !== 'AbortError') {
@@ -104,24 +108,32 @@ export function ActionDialog({ request, sessionId, signal, onClose, onDone }) {
       })
     return () => { active = false }
     // `missing.length` and `paramsKey` are the whole of what this depends on.
-  }, [paramsKey, missing.length, request.action, sessionId, signal])
+  }, [paramsKey, missing.length, signal])
 
   const plan = planned !== null && planned.key === paramsKey ? planned.result : null
   const blocked = plan?.blocked ?? null
   const canRun = plan !== null && blocked === null && missing.length === 0 && !running
 
-  const run = () => {
-    if (!canRun) return
+  const run = async () => {
+    if (!canRun || runningRef.current) return
+    runningRef.current = true
     setRunning(true)
     setRunError(null)
-    call({ op: 'action', sessionId, action: request.action, params }, signal)
-      .then(result => { setRunning(false); onDone(result) })
-      .catch(error => {
-        setRunning(false)
-        // A failed action keeps the dialog open: git's message is the useful
-        // part, and the reader may want to change a field and try again.
-        if (error.name !== 'AbortError') setRunError(String(error.message ?? error))
-      })
+    let result
+    try {
+      onRunningChange?.(true)
+      result = await call({ op: 'action', sessionId: origin.sessionId, target: origin.target, action: request.action, params }, signal)
+    } catch (error) {
+      // A failed action keeps the dialog open: git's message is the useful
+      // part, and the reader may want to change a field and try again.
+      if (error.name !== 'AbortError') setRunError(String(error.message ?? error))
+      return
+    } finally {
+      runningRef.current = false
+      setRunning(false)
+      onRunningChange?.(false)
+    }
+    onDone(result)
   }
 
   const fields = (request.fields ?? []).map((field, index) => {
@@ -173,7 +185,7 @@ export function ActionDialog({ request, sessionId, signal, onClose, onDone }) {
 
   return h('div', {
     className: 'gg-modal',
-    onMouseDown: event => { if (event.target === event.currentTarget) onClose() },
+    onMouseDown: event => { if (event.target === event.currentTarget && !runningRef.current) onClose() },
   }, h('form', {
     className: `gg-dialog${request.danger === true ? ' is-danger' : ''}`,
     role: 'dialog',
@@ -182,6 +194,8 @@ export function ActionDialog({ request, sessionId, signal, onClose, onDone }) {
     onSubmit: event => { event.preventDefault(); run() },
   },
   h('h2', { className: 'gg-dialog-title' }, request.title),
+  origin.repositoryLabel ? h('p', { className: 'gg-dialog-note' }, `Repository: ${origin.repositoryLabel}`) : null,
+  plan?.root ? h('p', { className: 'gg-dialog-note' }, h('code', null, plan.root)) : null,
   request.note === undefined ? null : h('p', { className: 'gg-dialog-note' }, request.note),
   plan === null || plan.state === undefined ? null : h('p', { className: 'gg-dialog-state' }, describeState(plan.state)),
   fields,

@@ -92,24 +92,34 @@ export function describeFetch(result) {
 }
 
 /** Accordion history: full-width graph rows, with one row-local expansion. */
-export function GraphView({ tabInfo, sessionId }) {
-  const signal = tabInfo.tab.signal
+export function GraphView({ tabInfo, sessionId, target, repositoryRoot, repositoryLabel, onRunningChange }) {
+  const targetId = JSON.stringify(target ?? null)
+  const lifetime = React.useMemo(() => new AbortController(), [sessionId, repositoryRoot, targetId, tabInfo.tab.signal])
+  const signal = lifetime.signal
+  const scopeKey = repositoryRoot ? `${sessionId}:${repositoryRoot}` : sessionId
+  React.useEffect(() => {
+    const abort = () => lifetime.abort()
+    const owner = tabInfo.tab.signal
+    owner?.addEventListener('abort', abort, { once: true })
+    if (owner?.aborted) abort()
+    return () => { lifetime.abort(); owner?.removeEventListener('abort', abort) }
+  }, [lifetime, tabInfo.tab.signal])
   const [state, setState] = React.useState({ commits: [], refs: null, exhausted: false, nextSkip: 0 })
   const [working, setWorking] = React.useState({ files: [], error: null })
-  const restoredAccordion = React.useRef(openAccordionBySession.get(sessionId))
-  const restoredLayout = React.useRef(accordionLayoutBySession.get(sessionId) ?? { height: ACCORDION_H, split: ACCORDION_SPLIT })
+  const restoredAccordion = React.useRef(openAccordionBySession.get(scopeKey))
+  const restoredLayout = React.useRef(accordionLayoutBySession.get(scopeKey) ?? { height: ACCORDION_H, split: ACCORDION_SPLIT })
   const [accordionHeight, setAccordionHeightState] = React.useState(restoredLayout.current.height)
   const [accordionSplit, setAccordionSplitState] = React.useState(restoredLayout.current.split)
-  const setAccordionHeight = value => { const next = Math.max(ACCORDION_MIN_H, Math.min(ACCORDION_MAX_H, value)); accordionLayoutBySession.set(sessionId, { height: next, split: accordionSplit }); setAccordionHeightState(next) }
-  const setAccordionSplit = value => { const next = Math.max(25, Math.min(75, value)); accordionLayoutBySession.set(sessionId, { height: accordionHeight, split: next }); setAccordionSplitState(next) }
-  React.useEffect(() => { const next = accordionLayoutBySession.get(sessionId) ?? { height: ACCORDION_H, split: ACCORDION_SPLIT }; setAccordionHeightState(next.height); setAccordionSplitState(next.split) }, [sessionId])
+  const setAccordionHeight = value => { const next = Math.max(ACCORDION_MIN_H, Math.min(ACCORDION_MAX_H, value)); accordionLayoutBySession.set(scopeKey, { height: next, split: accordionSplit }); setAccordionHeightState(next) }
+  const setAccordionSplit = value => { const next = Math.max(25, Math.min(75, value)); accordionLayoutBySession.set(scopeKey, { height: accordionHeight, split: next }); setAccordionSplitState(next) }
+  React.useEffect(() => { const next = accordionLayoutBySession.get(scopeKey) ?? { height: ACCORDION_H, split: ACCORDION_SPLIT }; setAccordionHeightState(next.height); setAccordionSplitState(next.split) }, [sessionId])
   const restoreCount = React.useRef(Math.max(120, Math.min(600, restoredAccordion.current?.loadedCount ?? 0)))
   const [selected, setSelected] = React.useState(() => restoredAccordion.current?.hash ?? null)
   const selectAccordion = React.useCallback(value => {
     setSelected(current => {
       const next = typeof value === 'function' ? value(current) : value
-      if (next === null) openAccordionBySession.delete(sessionId)
-      else openAccordionBySession.set(sessionId, { hash: next, loadedCount: Math.max(state.commits.length, openAccordionBySession.get(sessionId)?.loadedCount ?? 0) })
+      if (next === null) openAccordionBySession.delete(scopeKey)
+      else openAccordionBySession.set(scopeKey, { hash: next, loadedCount: Math.max(state.commits.length, openAccordionBySession.get(scopeKey)?.loadedCount ?? 0) })
       return next
     })
   }, [sessionId, state.commits.length])
@@ -134,16 +144,16 @@ export function GraphView({ tabInfo, sessionId }) {
   const [repo, setRepo] = React.useState(null)
   // The commits a reader has marked for comparison, oldest mark first. Two at
   // most: the first is the base, the second the side it is compared against.
-  const [markers, setMarkersState] = React.useState(() => markersBySession.get(sessionId) ?? [])
+  const [markers, setMarkersState] = React.useState(() => markersBySession.get(scopeKey) ?? [])
   const setMarkers = React.useCallback(value => {
     setMarkersState(current => {
       const next = typeof value === 'function' ? value(current) : value
-      if (next.length === 0) markersBySession.delete(sessionId)
-      else markersBySession.set(sessionId, next)
+      if (next.length === 0) markersBySession.delete(scopeKey)
+      else markersBySession.set(scopeKey, next)
       return next
     })
   }, [sessionId])
-  React.useEffect(() => { setMarkersState(markersBySession.get(sessionId) ?? []) }, [sessionId])
+  React.useEffect(() => { setMarkersState(markersBySession.get(scopeKey) ?? []) }, [sessionId])
   const request = React.useRef(0)
   const noticeTimer = React.useRef(null)
   const graphRef = React.useRef(null)
@@ -164,15 +174,16 @@ export function GraphView({ tabInfo, sessionId }) {
    * The action menus are built from this: a merge in progress offers its own
    * way out instead of actions the host would refuse.
    */
-  const loadState = React.useCallback(() => call({ op: 'state', sessionId }, signal)
+  const loadState = React.useCallback(() => call({ op: 'state', sessionId, target }, signal)
     // A host that answered without a state — an older build, or a route that
     // failed — leaves the graph with no action menu rather than an exception.
-    .then(result => { const state = result?.state ?? null; setRepo(state); return state })
-    .catch(error => { if (error.name !== 'AbortError') setRepo(null); return null }), [sessionId, signal])
-  const loadWorking = React.useCallback(() => call({ op: 'working', sessionId }, signal).then(result => {
+    .then(result => { if (signal.aborted) return null; const state = result?.state ?? null; setRepo(state); return state })
+    .catch(error => { if (!signal.aborted && error.name !== 'AbortError') setRepo(null); return null }), [sessionId, signal])
+  const loadWorking = React.useCallback(() => call({ op: 'working', sessionId, target }, signal).then(result => {
+    if (signal.aborted) return []
     const files = ['staged', 'unstaged', 'untracked'].flatMap(group => (result[group] ?? []).map(entry => ({ ...entry, group, staged: group === 'staged' })))
     setWorking({ files, error: null }); setReadAt(new Date()); return files
-  }).catch(err => { if (err.name !== 'AbortError') setWorking(current => ({ ...current, error: String(err.message ?? err) })); return [] }), [sessionId, signal])
+  }).catch(err => { if (!signal.aborted && err.name !== 'AbortError') setWorking(current => ({ ...current, error: String(err.message ?? err) })); return [] }), [sessionId, signal])
   /**
    * Read the history again.
    *
@@ -191,7 +202,7 @@ export function GraphView({ tabInfo, sessionId }) {
       const targetCount = append ? 120 : Math.max(120, Math.min(600, Math.max(state.commits.length, restoreCount.current)))
       const result = await call({
         op: 'commits',
-        sessionId,
+        sessionId, target,
         skip: append ? state.nextSkip : 0,
         limit: targetCount,
         ...(ref === '' ? {} : { ref }),
@@ -199,8 +210,8 @@ export function GraphView({ tabInfo, sessionId }) {
       if (request.current !== id || signal.aborted) return
       const previous = shown.current.commits
       const loadedCount = append ? state.commits.length + result.commits.length : result.commits.length
-      const saved = openAccordionBySession.get(sessionId)
-      if (saved?.hash) openAccordionBySession.set(sessionId, { ...saved, loadedCount: Math.max(saved.loadedCount ?? 0, loadedCount) })
+      const saved = openAccordionBySession.get(scopeKey)
+      if (saved?.hash) openAccordionBySession.set(scopeKey, { ...saved, loadedCount: Math.max(saved.loadedCount ?? 0, loadedCount) })
       restoreCount.current = Math.max(restoreCount.current, loadedCount)
       setReadAt(new Date())
       if (background && !append && sameCommits(previous, result.commits)) {
@@ -267,8 +278,9 @@ export function GraphView({ tabInfo, sessionId }) {
     // One indicator for both entries: whichever way a fetch was started, a
     // fetch is what is running, and the toolbar button shows it.
     setFetching(true)
+    onRunningChange?.(true)
     try {
-      const result = await call({ op: 'fetch', sessionId, prune }, signal)
+      const result = await call({ op: 'fetch', sessionId, target, prune }, signal)
       if (signal.aborted) return
       if (typeof result.error === 'string' && result.error.length > 0) setError(describeFetch(result))
       else {
@@ -281,13 +293,13 @@ export function GraphView({ tabInfo, sessionId }) {
       setRevision(value => value + 1)
     } catch (err) {
       if (err.name !== 'AbortError') setError(String(err.message ?? err))
-    } finally { setFetching(false) }
+    } finally { setFetching(false); onRunningChange?.(false) }
   }, [sessionId, signal, load, loadWorking, loadState])
   React.useEffect(() => { load(); loadWorking(); loadState(); return () => { request.current += 1; clearTimeout(noticeTimer.current) } }, [sessionId, signal])
   // The push channel needs no indicator of its own: an arrival shows up as a
   // row, and an outage reports itself in words.
   useRepositoryWatch({
-    sessionId,
+    sessionId, target,
     visible: tabInfo.tab.visible === true,
     onChanged: React.useCallback(() => { load(false, { background: true }); loadWorking(); loadState() }, [load, loadWorking, loadState]),
     onDegraded: React.useCallback(message => flash(`Live updates unavailable — ${message}`), []),
@@ -321,8 +333,8 @@ export function GraphView({ tabInfo, sessionId }) {
   }, [])
   const openComparison = React.useCallback((base, head) => {
     if (base === undefined || base === null) return
-    openCompareTab(tabInfo, base, head)
-  }, [tabInfo])
+    openCompareTab(tabInfo, base, head, { target, repositoryLabel })
+  }, [tabInfo, targetId, repositoryLabel])
   const laneWidth = Math.max(100, LANE_X0 * 2 + graph.columnCount * LANE_W)
   const rows = graph.rows.map((row, index) => h('div', { key: row.commit.hash, className: 'gg-row-stack' },
     h(CommitRow, { row, indent: laneWidth, dense: false, remotes: state.refs?.remotes ?? [], stashes: state.stashes ?? [],
@@ -335,7 +347,7 @@ export function GraphView({ tabInfo, sessionId }) {
         const ref = describeBadge(badge, state.refs?.refs ?? [], state.stashes ?? [])
         if (ref !== null) setMenu({ x: event.clientX, y: event.clientY, ref })
       } }),
-    selected === row.commit.hash ? (row.commit.synthetic ? h(WorkingAccordion, { files: working.files, sessionId, signal, tabInfo, onChanged: loadWorking, height: accordionHeight, split: accordionSplit, onHeightChange: setAccordionHeight, onSplitChange: setAccordionSplit }) : h(CommitAccordion, { hash: row.commit.hash, sessionId, signal, revision, tabInfo, onSelect: selectAccordion, height: accordionHeight, split: accordionSplit, onHeightChange: setAccordionHeight, onSplitChange: setAccordionSplit })) : null))
+    selected === row.commit.hash ? (row.commit.synthetic ? h(WorkingAccordion, { files: working.files, sessionId, target, repositoryLabel, onRunningChange, signal, tabInfo, onChanged: loadWorking, height: accordionHeight, split: accordionSplit, onHeightChange: setAccordionHeight, onSplitChange: setAccordionSplit }) : h(CommitAccordion, { hash: row.commit.hash, sessionId, target, repositoryLabel, signal, revision, tabInfo, onSelect: selectAccordion, height: accordionHeight, split: accordionSplit, onHeightChange: setAccordionHeight, onSplitChange: setAccordionSplit })) : null))
   const totalHeight = graph.rows.length * ROW_H + (expanded ? accordionHeight : 0)
   const stamp = formatTime(readAt)
   const refreshTitle = `Refresh history and working changes${stamp === null ? '' : ` — last read ${stamp}`}`
@@ -492,7 +504,7 @@ export function GraphView({ tabInfo, sessionId }) {
     }) : null,
     pending === null ? null : h(ActionDialog, {
       request: pending,
-      sessionId,
+      sessionId, target, repositoryLabel, onRunningChange,
       signal,
       onClose: () => setPending(null),
       onDone: afterAction,

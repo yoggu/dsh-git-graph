@@ -22,7 +22,8 @@ import { EVENTS_ROUTE } from './constants.js'
  *
  * @param props - the session to follow, whether the tab is on screen, and the callbacks.
  */
-export function useRepositoryWatch({ sessionId, visible, onChanged, onDegraded }) {
+export function useRepositoryWatch({ sessionId, target, visible, onChanged, onDegraded }) {
+  const targetJson = target === undefined ? '' : JSON.stringify(target)
   // The callbacks change whenever the view re-renders; the stream must not be
   // torn down and rebuilt because of that.
   const changed = React.useRef(onChanged)
@@ -31,7 +32,7 @@ export function useRepositoryWatch({ sessionId, visible, onChanged, onDegraded }
   degraded.current = onDegraded
   React.useEffect(() => {
     if (!visible || typeof EventSource !== 'function') return undefined
-    const address = `${EVENTS_ROUTE}?sessionId=${encodeURIComponent(sessionId)}`
+    const address = `${EVENTS_ROUTE}?sessionId=${encodeURIComponent(sessionId)}${targetJson ? `&target=${encodeURIComponent(targetJson)}` : ''}`
     const source = new EventSource(address)
     let abandoned = false
     let opened = false
@@ -73,7 +74,7 @@ export function useRepositoryWatch({ sessionId, visible, onChanged, onDegraded }
       abandoned = true
       source.close()
     }
-  }, [sessionId, visible])
+  }, [sessionId, targetJson, visible])
   React.useEffect(() => {
     if (!visible) return undefined
     // Coming back to the foreground is cheap to check and catches the case the

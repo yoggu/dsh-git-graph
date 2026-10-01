@@ -3,7 +3,7 @@ import { fileActions } from './actions.js'
 import { call } from './api.js'
 import { ACCORDION_H, ACCORDION_MAX_H, ACCORDION_MIN_H, ACCORDION_SPLIT, EMPTY_TREE } from './constants.js'
 import { ActionDialog } from './dialog.js'
-import { ChangedTree, openDiffTab } from './files.js'
+import { ChangedTree, openDiffTab, snapshotRepositoryScope } from './files.js'
 import { ContextMenu, formatDate } from './ui.js'
 
 const h = React.createElement
@@ -40,21 +40,23 @@ export function AccordionSurface({ id, label, height, split, onHeightChange, onS
       onKeyDown: event => { if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); onHeightChange(Math.max(ACCORDION_MIN_H, Math.min(ACCORDION_MAX_H, height + (event.key === 'ArrowUp' ? -20 : 20)))) } } }))
 }
 
-export function CommitAccordion({ hash, sessionId, signal, revision = 0, onSelect, tabInfo, height, split, onHeightChange, onSplitChange }) {
-  const [state, setState] = React.useState({ detail: null, error: null })
+export function CommitAccordion({ hash, sessionId, target, repositoryLabel, signal, revision = 0, onSelect, tabInfo, height, split, onHeightChange, onSplitChange }) {
+  const key = JSON.stringify([sessionId, target, hash])
+  const [state, setState] = React.useState({ key: '', detail: null, error: null })
   React.useEffect(() => {
     let active = true
-    setState(current => ({ detail: current.detail?.hash === hash ? current.detail : null, error: null }))
-    call({ op: 'commit', sessionId, hash }, signal).then(result => { if (active) setState({ detail: result.detail, error: null }) })
-      .catch(error => { if (active && error.name !== 'AbortError') setState({ detail: null, error: String(error.message ?? error) }) })
+    setState(current => ({ key, detail: current.key === key ? current.detail : null, error: null }))
+    call({ op: 'commit', sessionId, target, hash }, signal).then(result => { if (active) setState({ key, detail: result.detail, error: null }) })
+      .catch(error => { if (active && error.name !== 'AbortError') setState({ key, detail: null, error: String(error.message ?? error) }) })
     return () => { active = false }
-  }, [hash, sessionId, signal, revision])
-  const detail = state.detail?.hash === hash ? state.detail : null
-  if (state.error) return h(AccordionSurface, { id: `gg-accordion-${hash}`, label: 'Commit details unavailable', height, split, onHeightChange, onSplitChange, state: true, error: true,
-    first: h(React.Fragment, null, h('strong', null, 'Unable to load commit details'), h('span', null, state.error)) })
+  }, [key, signal, revision])
+  const current = state.key === key ? state : { detail: null, error: null }
+  const detail = current.detail?.hash === hash ? current.detail : null
+  if (current.error) return h(AccordionSurface, { id: `gg-accordion-${hash}`, label: 'Commit details unavailable', height, split, onHeightChange, onSplitChange, state: true, error: true,
+    first: h(React.Fragment, null, h('strong', null, 'Unable to load commit details'), h('span', null, current.error)) })
   if (!detail) return h(AccordionSurface, { id: `gg-accordion-${hash}`, label: 'Loading commit details', height, split, onHeightChange, onSplitChange, state: true,
     first: h(React.Fragment, null, h('span', { className: 'gg-spinner', 'aria-hidden': 'true' }), h('span', null, 'Loading commit details…')) })
-  const openFile = file => openDiffTab(tabInfo, { mode: 'commits', base: detail.parents[0] ?? EMPTY_TREE, head: detail.hash, path: file.path, oldPath: file.oldPath })
+  const openFile = file => openDiffTab(tabInfo, { target, repositoryLabel, mode: 'commits', base: detail.parents[0] ?? EMPTY_TREE, head: detail.hash, path: file.path, oldPath: file.oldPath })
   return h(AccordionSurface, { id: `gg-accordion-${hash}`, label: 'Commit details', height, split, onHeightChange, onSplitChange,
     first: h('section', { className: 'gg-accordion-meta' },
       h('dl', { className: 'gg-meta' },
@@ -79,7 +81,7 @@ export function CommitAccordion({ hash, sessionId, signal, revision = 0, onSelec
  * @param props - the files, the session, and how to report a change upward.
  * @returns the accordion, and its menu and dialog when either is open.
  */
-export function WorkingAccordion({ files = [], sessionId, signal, tabInfo, onChanged, height, split, onHeightChange, onSplitChange }) {
+export function WorkingAccordion({ files = [], sessionId, target, repositoryLabel, signal, tabInfo, onChanged, onRunningChange, height, split, onHeightChange, onSplitChange }) {
   const [menu, setMenu] = React.useState(null)
   const [pending, setPending] = React.useState(null)
   const [notice, setNotice] = React.useState(null)
@@ -90,7 +92,7 @@ export function WorkingAccordion({ files = [], sessionId, signal, tabInfo, onCha
     clearTimeout(timer.current)
     timer.current = setTimeout(() => setNotice(null), 2600)
   }
-  const openFile = file => openDiffTab(tabInfo, { mode: 'working', base: 'HEAD', head: '', path: file.path, oldPath: file.oldPath, group: file.group, staged: file.group === 'staged' })
+  const openFile = file => openDiffTab(tabInfo, { target, repositoryLabel, mode: 'working', base: 'HEAD', head: '', path: file.path, oldPath: file.oldPath, group: file.group, staged: file.group === 'staged' })
   const groups = ['staged', 'unstaged', 'untracked']
   return h(React.Fragment, null,
     notice === null ? null : h('div', { className: 'gg-notice', role: 'status' }, notice),
@@ -105,20 +107,23 @@ export function WorkingAccordion({ files = [], sessionId, signal, tabInfo, onCha
           h(ChangedTree, {
             files: entries,
             onOpen: openFile,
-            onContextMenu: (event, file) => setMenu({ x: event.clientX, y: event.clientY, file, note: file.path }),
+            onContextMenu: (event, file) => setMenu({ x: event.clientX, y: event.clientY, file, note: file.path, sessionId, signal, ...snapshotRepositoryScope({ target, repositoryLabel }) }),
           }))
       })) }),
     menu === null ? null : h(ContextMenu, {
       menu,
       actions: fileActions(menu.file),
-      onAction: setPending,
+      onAction: request => setPending({ request, sessionId: menu.sessionId, signal: menu.signal, ...snapshotRepositoryScope(menu) }),
       onClose: () => setMenu(null),
       onFlash: flash,
     }),
     pending === null ? null : h(ActionDialog, {
-      request: pending,
-      sessionId,
-      signal,
+      request: pending.request,
+      sessionId: pending.sessionId,
+      target: pending.target,
+      repositoryLabel: pending.repositoryLabel,
+      signal: pending.signal,
+      onRunningChange,
       onClose: () => setPending(null),
       onDone: result => {
         setPending(null)

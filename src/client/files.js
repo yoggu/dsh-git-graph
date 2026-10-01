@@ -6,11 +6,19 @@ import { diffFileIdentity } from './diff-layout.js'
 
 const h = React.createElement
 
+/** Copy repository identity at navigation/confirmation boundaries, never selection globals. */
+export function snapshotRepositoryScope({ target, repositoryLabel } = {}) {
+  return {
+    target: target === undefined ? undefined : JSON.parse(JSON.stringify(target)),
+    repositoryLabel,
+  }
+}
+
 /** Open every changed file in a fresh right-sidebar diff tab. */
 export function openDiffTab(tabInfo, params) {
   const openTab = tabInfo?.tab?.actions?.openTab
   if (typeof openTab !== 'function') return false
-  tabInfo.tab.actions.openTab(DIFF_KIND, { params })
+  tabInfo.tab.actions.openTab(DIFF_KIND, { params: { ...params, ...snapshotRepositoryScope(params) } })
   return true
 }
 
@@ -25,10 +33,10 @@ export function openDiffTab(tabInfo, params) {
  * @param head - the later revision, or nothing for the working tree.
  * @returns whether a tab was opened.
  */
-export function openCompareTab(tabInfo, base, head) {
+export function openCompareTab(tabInfo, base, head, scope = {}) {
   const openTab = tabInfo?.tab?.actions?.openTab
   if (typeof openTab !== 'function') return false
-  tabInfo.tab.actions.openTab(COMPARE_KIND, { params: { base, head: head ?? '' } })
+  tabInfo.tab.actions.openTab(COMPARE_KIND, { params: { base, head: head ?? '', ...snapshotRepositoryScope(scope) } })
   return true
 }
 
@@ -121,12 +129,12 @@ export function ChangedTree({ files = [], onOpen, onContextMenu, empty = 'No cha
 }
 
 /** Files are flat entries {path, oldPath?, status, group?, staged?}; tabs are preferred. */
-export function FileWorkspace({ files = [], sessionId, signal, base, head, mode = 'commits', revision = 0, tabInfo }) {
+export function FileWorkspace({ files = [], sessionId, target, repositoryLabel, signal, base, head, mode = 'commits', revision = 0, tabInfo }) {
   const [filter, setFilter] = React.useState('')
   const [selection, setSelection] = React.useState(null)
   const rows = React.useRef(new Map())
   const listRef = React.useRef(null)
-  const scope = JSON.stringify([sessionId, mode, base, head])
+  const scope = JSON.stringify([sessionId, target, mode, base, head])
   const normalized = files.map(file => ({ ...file, group: mode === 'working' ? (file.group || (file.staged ? 'staged' : file.status === '?' ? 'untracked' : 'unstaged')) : 'commits' }))
   const query = filter.trim().toLocaleLowerCase()
   const order = ['staged', 'unstaged', 'untracked']
@@ -142,8 +150,8 @@ export function FileWorkspace({ files = [], sessionId, signal, base, head, mode 
   }, [scope, selectedId, selection])
   const pick = (file, focus) => {
     if (tabInfo) openDiffTab(tabInfo, mode === 'working'
-      ? { mode: 'working', base: 'HEAD', head: '', path: file.path, oldPath: file.oldPath, group: file.group, staged: file.group === 'staged' }
-      : { mode: 'commits', base, head, path: file.path, oldPath: file.oldPath })
+      ? { target, repositoryLabel, mode: 'working', base: 'HEAD', head: '', path: file.path, oldPath: file.oldPath, group: file.group, staged: file.group === 'staged' }
+      : { target, repositoryLabel, mode: 'commits', base, head, path: file.path, oldPath: file.oldPath })
     const id = diffFileIdentity(file, mode)
     setSelection({ scope, id })
     if (focus) { const node = rows.current.get(id); node?.focus(); node?.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }
@@ -174,7 +182,7 @@ export function FileWorkspace({ files = [], sessionId, signal, base, head, mode 
           }, h(FileIcon, { path: file.path }), h('span', { className: 'gg-sr-only' }, `${status.title}: `), h('span', { className: 'gg-du-path' }, title))
         }))
     })))
-  const second = h(DiffPanel, { sessionId, signal, revision, params: selected ? { mode, base, head, path: selected.path, oldPath: selected.oldPath, group: selected.group, staged: selected.group === 'staged' } : {} })
+  const second = h(DiffPanel, { sessionId, target, repositoryLabel, signal, revision, params: selected ? { target, repositoryLabel, mode, base, head, path: selected.path, oldPath: selected.oldPath, group: selected.group, staged: selected.group === 'staged' } : { target, repositoryLabel } })
   return h('div', { className: 'gg-du-workspace' }, h(SplitPane, { first, second, axis: 'auto', initial: 30, label: 'File list and diff' }))
 }
 

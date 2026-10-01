@@ -44,11 +44,31 @@ git('push', '-q', '-u', 'origin', 'main')
 git('update-ref', 'refs/remotes/origin/dev', git('rev-parse', 'HEAD~1'))
 const realRepo = process.env.GRAPH_TEST_REPO || ''
 const realBefore = realRepo ? execFileSync('git', ['-C', realRepo, 'status', '--porcelain=v2'], { encoding: 'utf8' }) : ''
-const testCtx = { get(name) { return name === 'sessions' ? { get(id) { return { header: { cwd: id === 'history' && realRepo ? realRepo : dir } } } } : undefined } }
+const collection = await mkdtemp(join(tmpdir(), 'gg-picker-'))
+const otherWorkspace = await mkdtemp(join(tmpdir(), 'gg-picker-other-'))
+const initPickerRepo = async (root, subject) => {
+  await mkdir(root, { recursive: true })
+  const run = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: 'pipe' }).trim()
+  run('init', '-q'); run('config', 'user.name', 'Picker Test'); run('config', 'user.email', 'picker@example.invalid')
+  await writeFile(join(root, 'shared.txt'), subject + '\n'); run('add', '.'); run('commit', '-qm', subject)
+  return root
+}
+const childA = await initPickerRepo(join(collection, 'child-a'), 'Repository A')
+const childB = await initPickerRepo(join(collection, 'packages/child-b'), 'Repository B')
+await initPickerRepo(otherWorkspace, 'Other workspace repository')
+const workspaceList = [
+  { id: 'fixture-root', title: 'Fixture', path: dir },
+  { id: 'collection', title: 'Plugins', path: collection },
+  { id: 'other', title: 'Other project', path: otherWorkspace },
+]
+const testCtx = { get(name) {
+  if (name === 'sessions') return { get(id) { return { header: { cwd: id === 'parent' ? collection : id === 'history' && realRepo ? realRepo : dir } } } }
+  if (name === 'workspaceRegistry') return { list: () => workspaceList, get: id => workspaceList.find(workspace => workspace.id === id) }
+} }
 const theme = `
 * { box-sizing:border-box } body { margin:0; font-family:system-ui,sans-serif; background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary) }
-:root { color-scheme:dark; --dsw-alias-bg-base:#151515; --dsw-alias-bg-layer-2:#282828; --dsw-alias-label-primary:#e9e9eb; --dsw-alias-label-secondary:#a1a1ab; --dsw-alias-border-l1:#343438; --dsw-alias-border-l2:#515158; --dsw-alias-brand-primary:#639fff; --dsw-alias-state-success-primary:#72c58b; --dsw-alias-state-error-primary:#f48787; --dsh-content-font-size:14px; --dsh-content-font-size-secondary:13px; }
-:root[data-theme=light] { color-scheme:light; --dsw-alias-bg-base:#fff; --dsw-alias-bg-layer-2:#f1f2f4; --dsw-alias-label-primary:#1d2330; --dsw-alias-label-secondary:#626875; --dsw-alias-border-l1:#d8dce3; --dsw-alias-border-l2:#aab2c0; --dsw-alias-brand-primary:#286bd0; --dsw-alias-state-success-primary:#16733c; --dsw-alias-state-error-primary:#ba3434; }
+:root { color-scheme:dark; --dsw-alias-bg-base:#151515; --dsw-alias-bg-overlay:#282828; --dsw-alias-bg-layer-2:#282828; --dsw-alias-label-primary:#e9e9eb; --dsw-alias-label-secondary:#a1a1ab; --dsw-alias-border-l1:#343438; --dsw-alias-border-l2:#515158; --dsw-alias-brand-primary:#639fff; --dsw-alias-state-success-primary:#72c58b; --dsw-alias-state-error-primary:#f48787; --dsh-content-font-size:14px; --dsh-content-font-size-secondary:13px; }
+:root[data-theme=light] { color-scheme:light; --dsw-alias-bg-base:#fff; --dsw-alias-bg-overlay:#fff; --dsw-alias-bg-layer-2:#f1f2f4; --dsw-alias-label-primary:#1d2330; --dsw-alias-label-secondary:#626875; --dsw-alias-border-l1:#d8dce3; --dsw-alias-border-l2:#aab2c0; --dsw-alias-brand-primary:#286bd0; --dsw-alias-state-success-primary:#16733c; --dsw-alias-state-error-primary:#ba3434; }
 .fixture-shell { height:100vh; display:flex; flex-direction:column; overflow:hidden } .fixture-title{height:32px;display:flex;align-items:center;padding:0 8px;border-bottom:1px solid var(--dsw-alias-border-l1)} .fixture-body{flex:1;min-height:0}
 `
 const html = `<!doctype html><html data-theme="dark"><head><meta charset="utf-8"><style>${theme}</style></head><body><div id="root"></div><script src="/fixture.js"></script><script src="/client.js"></script></body></html>`
@@ -126,7 +146,10 @@ const waitAccordion = async label => {
   await frame()
 }
 const waitDiff = async path => {
-  await page.waitForFunction(expected => document.querySelector('.gg-du-title')?.textContent === expected && ![...document.querySelectorAll('.gg-empty')].some(node => /Loading/.test(node.textContent)), path)
+  await page.waitForFunction(expected => {
+    const title = document.querySelector('.gg-du-title')?.textContent ?? ''
+    return (title === expected || title.endsWith(` · ${expected}`)) && ![...document.querySelectorAll('.gg-empty')].some(node => /Loading/.test(node.textContent))
+  }, path)
   await frame()
 }
 try {
@@ -242,6 +265,18 @@ try {
   check('When space runs out the remote segment yields before the branch name', squeezed.remote < 0.4 && squeezed.name > 0.7)
   const narrowColumns = await page.locator('.gg-column-heading > span').evaluateAll(nodes => Object.fromEntries(nodes.map(node => [node.textContent.trim(), getComputedStyle(node).display])))
   check('Narrow history hides lower-priority Author and Commit columns', narrowColumns.Author === 'none' && narrowColumns.Commit === 'none' && narrowColumns.Graph !== 'none' && narrowColumns.Description !== 'none')
+  // Respect larger UI typography too: the timestamp must not wrap into a
+  // second line just because the narrow Date column has only 112 pixels.
+  await page.evaluate(() => document.documentElement.style.setProperty('--dsh-content-font-size', '16px')); await frame()
+  const metadataFitsRows = () => page.locator('.gg-row .gg-date').evaluateAll(nodes => nodes.filter(node => node.textContent.trim()).every(node => {
+    const cell = node.getBoundingClientRect(), row = node.closest('.gg-row').getBoundingClientRect()
+    return cell.top >= row.top - .5 && cell.bottom <= row.bottom + .5 && cell.right <= row.right + .5
+  }))
+  check('Narrow date cells stay on one line inside their own fixed-height row', await metadataFitsRows())
+  await page.locator('.gg-row').nth(1).hover(); await frame()
+  check('Hovering a narrow commit does not spill dates into adjacent rows', await metadataFitsRows())
+  await screenshot('history-narrow-hover.png')
+  await page.evaluate(() => document.documentElement.style.removeProperty('--dsh-content-font-size')); await frame()
   await page.locator('.gg-row').nth(1).click(); await waitAccordion('Commit details')
   check('Narrow accordion stacks the 50/50 detail columns', await page.locator('.gg-accordion').evaluate(e => getComputedStyle(e).gridTemplateColumns.split(' ').length === 1 && e.scrollWidth <= e.clientWidth))
   await screenshot('accordion-narrow-dark.png')
@@ -435,6 +470,87 @@ try {
   check('A fetch leaves the working tree and HEAD alone', execFileSync('git', ['status', '--porcelain=v2'], { cwd: dir, encoding: 'utf8' }) === worktreeBefore && execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).trim() === headBefore)
   await screenshot('fetch-discovers-branch.png')
 
+  // No recursive discovery: workspace folders first, explicit one-level expansion.
+  await page.evaluate(() => testHarness.setSession('parent'))
+  await page.getByRole('button', { name: 'Select repository', exact: true }).waitFor()
+  await page.waitForFunction(() => document.querySelector('.gg-repository-trigger')?.textContent.includes('Choose a repository'))
+  check('Non-Git parent does not load or auto-select a child repository', await page.locator('.gg-row').count() === 0)
+  const childRequests = () => requests.filter(request => request.op === 'repositoryLevel' && request.sessionId === 'parent' && request.includeChildren === true)
+  await page.getByRole('button', { name: 'Select repository', exact: true }).click()
+  await page.getByRole('button', { name: 'Expand Plugins', exact: true }).waitFor()
+  await page.getByRole('button', { name: 'Other project', exact: true }).waitFor()
+  await page.waitForFunction(() => document.querySelector('.gg-repository-option[aria-label="Other project"]')?.hasAttribute('aria-pressed'))
+  check('Unselected folders are not marked as the active repository', await page.locator('.gg-repository-tree-row.is-selected, .gg-repository-check').count() === 0)
+  check('Opening picker initially shows only workspace folders', await page.getByRole('button', { name: 'child-a', exact: true }).count() === 0 && await page.getByRole('button', { name: 'packages/child-b', exact: true }).count() === 0)
+  check('Opening picker reads no child directories', childRequests().length === 0)
+  check('Picker has no scan notices or extra footer clutter', await page.locator('.gg-repository-notices, .gg-repository-footer').count() === 0)
+  await screenshot('repository-picker-workspaces.png')
+  await page.getByRole('button', { name: 'Expand Plugins', exact: true }).click()
+  await page.getByRole('button', { name: 'child-a', exact: true }).waitFor()
+  await page.getByRole('button', { name: 'Expand packages', exact: true }).waitFor()
+  check('Expanding workspace reads exactly one level', childRequests().length === 1 && childRequests()[0].path === '.' && await page.getByRole('button', { name: 'packages/child-b', exact: true }).count() === 0)
+  await page.getByRole('button', { name: 'Collapse Plugins', exact: true }).click()
+  await page.getByRole('button', { name: 'child-a', exact: true }).waitFor({ state: 'hidden' })
+  await page.getByRole('button', { name: 'Expand Plugins', exact: true }).click()
+  await page.getByRole('button', { name: 'child-a', exact: true }).waitFor()
+  check('Collapse and reopen reuses the loaded directory level', childRequests().length === 1)
+  await page.getByRole('button', { name: 'child-a', exact: true }).click()
+  await page.locator('.gg-row', { hasText: 'Repository A' }).waitFor()
+  check('Child repository opens without switching session', (await page.locator('.gg-repository-trigger').innerText()).includes('child-a'))
+  await page.locator('.gg-row', { hasText: 'Repository A' }).click()
+  await page.locator('.gg-tree-file[title="shared.txt"]').click()
+  await page.locator('.gg-du-code', { hasText: 'Repository A' }).waitFor()
+  const pinnedDiff = await page.evaluate(() => testState.opened.at(-1).params)
+  check('Diff tab snapshots child repository target', pinnedDiff.target.workspaceId === 'collection' && pinnedDiff.target.path === 'child-a')
+  await page.evaluate(() => testHarness.setSession('parent'))
+  await page.locator('.gg-row', { hasText: 'Repository A' }).waitFor()
+  await page.getByRole('button', { name: 'Select repository', exact: true }).click()
+  const beforeSearch = childRequests().length
+  await page.getByRole('searchbox', { name: 'Find repositories' }).fill('child-b')
+  await frame()
+  check('Searching unloaded folders does not trigger deeper scans', childRequests().length === beforeSearch && await page.getByRole('button', { name: 'packages/child-b', exact: true }).count() === 0)
+  await page.getByRole('searchbox', { name: 'Find repositories' }).fill('')
+  const rootExpand = page.getByRole('button', { name: 'Expand Plugins', exact: true })
+  if (await rootExpand.count()) await rootExpand.click()
+  await page.getByRole('button', { name: 'Expand packages', exact: true }).waitFor()
+  const beforeNested = childRequests().length
+  await page.getByRole('button', { name: 'Expand packages', exact: true }).click()
+  await page.getByRole('button', { name: 'packages/child-b', exact: true }).waitFor()
+  check('Expanding a folder loads only its immediate next level', childRequests().length === beforeNested + 1 && childRequests().at(-1).path === 'packages')
+  await page.getByRole('searchbox', { name: 'Find repositories' }).fill('child-b')
+  await page.getByRole('button', { name: 'packages/child-b', exact: true }).waitFor()
+  check('Search filters loaded nested folders without broad discovery', await page.getByRole('button', { name: 'child-a', exact: true }).count() === 0)
+  await page.getByRole('button', { name: 'packages/child-b', exact: true }).focus()
+  await page.keyboard.press('Enter')
+  await page.locator('.gg-row', { hasText: 'Repository B' }).waitFor()
+  check('Keyboard selection switches child history and isolates old rows', await page.locator('.gg-row', { hasText: 'Repository A' }).count() === 0)
+  await page.getByRole('button', { name: 'Select repository', exact: true }).click()
+  await page.getByRole('searchbox', { name: 'Find repositories' }).fill('Other project')
+  await page.getByRole('button', { name: 'Other project', exact: true }).click()
+  await page.locator('.gg-row', { hasText: 'Other workspace repository' }).waitFor()
+  check('Other workspace root opens without a new session', requests.some(request => request.op === 'commits' && request.sessionId === 'parent' && request.target?.workspaceId === 'other'))
+  await page.evaluate(params => testHarness.setSession('parent', 'git-diff', params), pinnedDiff)
+  await page.locator('.gg-du-code', { hasText: 'Repository A' }).waitFor()
+  check('Previously opened diff remains bound to original repo', !(await page.locator('.gg-du-panel').innerText()).includes('Other workspace repository'))
+  await page.evaluate(() => testHarness.setSession('parent'))
+  await page.locator('.gg-row', { hasText: 'Other workspace repository' }).waitFor()
+  check('Repository selection survives a visit to another tab', (await page.locator('.gg-repository-trigger').innerText()).includes('Other project'))
+  check('Only selected repo is watched', openStreams === 1)
+  check('Client never invokes legacy recursive discovery', !requests.some(request => request.op === 'repositories'))
+  await screenshot('repository-picker-graph.png')
+  await page.getByRole('button', { name: 'Select repository', exact: true }).click()
+  await page.getByRole('button', { name: 'Expand Plugins', exact: true }).waitFor()
+  check('Picker uses a compact bounded popover instead of a full-width overlay', await page.locator('.gg-repository-menu').evaluate(node => { const rect = node.getBoundingClientRect(); return rect.width <= 422 && rect.height <= 522 }))
+  check('Dark picker uses the application surface rather than the grey overlay token', await page.locator('.gg-repository-menu').evaluate(node => getComputedStyle(node).backgroundColor) === 'rgb(21, 21, 21)')
+  check('Search focus is indicated by the search row, not a heavy native input outline', await page.getByRole('searchbox', { name: 'Find repositories' }).evaluate(node => getComputedStyle(node).outlineStyle) === 'none')
+  await screenshot('repository-picker-dark.png')
+  await page.evaluate(() => testHarness.theme('light')); await frame()
+  check('Repository picker follows the light theme', await page.locator('.gg-repository-menu').evaluate(node => getComputedStyle(node).backgroundColor) === 'rgb(255, 255, 255)')
+  await screenshot('repository-picker-light.png')
+  await page.getByRole('searchbox', { name: 'Find repositories' }).press('Escape')
+  check('Escape closes picker and restores trigger focus', await page.locator('.gg-repository-menu').count() === 0 && await page.getByRole('button', { name: 'Select repository', exact: true }).evaluate(node => document.activeElement === node))
+  await page.evaluate(() => testHarness.theme('dark'))
+
   check('No browser JavaScript exceptions', errors.length === 0)
   if (realRepo) check('Real repository working tree is unchanged', execFileSync('git', ['-C', realRepo, 'status', '--porcelain=v2'], { encoding: 'utf8' }) === realBefore)
   await writeFile(new URL('results.json', output), JSON.stringify({ passed: checks.length, checks, errors, browser: await browser.version(), executablePath, limits: 'Real client and host Git reads, substitute Cordis mount/theme. Not a live DSH routing/HMR test.', realRepo: realRepo || null, requests: requests.length }, null, 2))
@@ -451,4 +567,6 @@ try {
   await new Promise(resolve => server.close(resolve))
   await rm(dir, { recursive: true, force: true })
   await rm(remoteDir, { recursive: true, force: true })
+  await rm(collection, { recursive: true, force: true })
+  await rm(otherWorkspace, { recursive: true, force: true })
 }

@@ -1,6 +1,52 @@
 import { ACCORDION_H, ACCORDION_MAX_H, ACCORDION_MIN_H, ROW_H } from './constants.js'
 
 export const CSS = `
+.gg-repository-workbench { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.gg-repository-workbench > .gg-workbench { flex: 1; min-height: 0; }
+.gg-repository-picker { flex: none; position: relative; z-index: 12; padding: 5px 8px; border-bottom: 1px solid var(--dsw-alias-border-l1); }
+.gg-repository-trigger { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 32px; padding: 5px 8px; text-align: left; font: inherit; font-size: 12px; border: 1px solid transparent; border-radius: 6px; color: var(--dsw-alias-label-primary); background: transparent; cursor: pointer; transition: background .12s; }
+.gg-repository-trigger:hover, .gg-repository-trigger.is-open { background: var(--dsw-alias-bg-layer-2); border-color: var(--dsw-alias-border-l1); }
+.gg-repository-trigger:disabled { opacity: .5; cursor: default; }
+.gg-repository-trigger-icon { flex: none; color: var(--dsw-alias-label-secondary); }
+.gg-repository-caption { display: flex; align-items: baseline; gap: 7px; flex: 1; min-width: 0; white-space: nowrap; }
+.gg-repository-workspace-name { max-width: 45%; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--dsw-alias-label-secondary); }
+.gg-repository-slash { opacity: .5; }
+.gg-repository-name, .gg-repository-placeholder { overflow: hidden; text-overflow: ellipsis; }
+.gg-repository-name { font-weight: 550; }
+.gg-repository-placeholder { color: var(--dsw-alias-label-secondary); }
+.gg-repository-chevron { flex: none; color: var(--dsw-alias-label-secondary); transition: transform .12s; }
+.gg-repository-trigger.is-open .gg-repository-chevron { transform: rotate(180deg); }
+.gg-repository-menu { position: absolute; top: calc(100% + 4px); left: 8px; width: min(420px, calc(100% - 16px)); max-height: min(520px, 70vh); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--dsw-alias-border-l2); border-radius: 10px; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); box-shadow: 0 12px 32px color-mix(in srgb, var(--dsw-alias-bg-base) 70%, transparent), 0 2px 8px color-mix(in srgb, var(--dsw-alias-bg-base) 40%, transparent); }
+.gg-repository-search { display: flex; align-items: center; gap: 9px; padding: 10px 12px; border-bottom: 1px solid var(--dsw-alias-border-l1); }
+.gg-repository-search-icon { flex: none; color: var(--dsw-alias-label-secondary); }
+.gg-repository-search input { min-width: 0; flex: 1; height: 26px; border: 0; border-radius: 3px; padding: 0; font: inherit; font-size: 12px; background: transparent; color: var(--dsw-alias-label-primary); outline: none; }
+.gg-repository-search input::placeholder { color: var(--dsw-alias-label-secondary); }
+.gg-root .gg-repository-search input:focus-visible { outline: none; box-shadow: none; }
+.gg-repository-rescan { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 5px; color: var(--dsw-alias-label-secondary); background: transparent; cursor: pointer; }
+.gg-repository-rescan:hover:not(:disabled) { color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-2); }
+.gg-repository-rescan:disabled { opacity: .4; cursor: default; }
+.gg-repository-groups { overflow: auto; min-height: 0; padding: 6px; scrollbar-width: thin; }
+.gg-repository-tree-row { display: flex; align-items: center; min-height: 32px; border-radius: 5px; }
+.gg-repository-tree-row:hover { background: var(--dsw-alias-bg-layer-2); }
+.gg-repository-tree-row.is-selected { background: color-mix(in srgb, var(--dsw-alias-brand-primary) 10%, var(--dsw-alias-bg-base)); box-shadow: inset 2px 0 var(--dsw-alias-brand-primary); }
+.gg-repository-expand { flex: none; display: grid; place-items: center; width: 25px; height: 28px; border: 0; border-radius: 4px; padding: 0; color: var(--dsw-alias-label-secondary); background: transparent; cursor: pointer; }
+.gg-repository-expand svg { width: 13px; height: 13px; transform: rotate(-90deg); transition: transform .12s; }
+.gg-repository-expand.is-expanded svg { transform: rotate(0deg); }
+.gg-repository-expand:hover:not(:disabled) { color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-2); }
+.gg-repository-option { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; min-height: 32px; border: 0; border-radius: 4px; padding: 5px 8px 5px 2px; font: inherit; font-size: 12px; text-align: left; color: inherit; background: transparent; cursor: pointer; }
+.gg-repository-option:disabled, .gg-repository-expand:disabled { opacity: .5; cursor: default; }
+.gg-repository-row-icon { flex: none; width: 15px; height: 15px; color: var(--dsw-alias-label-secondary); }
+.gg-repository-row-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 18px; }
+.gg-repository-current { flex: none; font-size: 10px; font-weight: 400; color: var(--dsw-alias-label-secondary); }
+.gg-repository-tree-row.is-selected .gg-repository-row-icon, .gg-repository-check { color: var(--dsw-alias-brand-primary); }
+.gg-repository-check { flex: none; width: 14px; height: 14px; }
+.gg-repository-status { display: flex; align-items: center; gap: 7px; padding: 5px 9px; font-size: 11px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
+.gg-repository-status.is-error { display: block; color: var(--dsw-alias-state-error-primary); }
+.gg-repository-retry { margin-left: 6px; border: 0; padding: 0; font: inherit; text-decoration: underline; background: transparent; color: inherit; cursor: pointer; }
+.gg-repository-empty { padding: 18px 12px; text-align: center; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.gg-repository-trigger:focus-visible, .gg-repository-option:focus-visible, .gg-repository-expand:focus-visible, .gg-repository-rescan:focus-visible { outline: 1px solid var(--dsw-alias-brand-primary); outline-offset: -1px; }
+.gg-repository-search:focus-within { box-shadow: inset 0 -1px var(--dsw-alias-brand-primary); }
+
 .gg-tab-title { display: inline-flex; align-items: center; gap: 5px; }
 .gg-tab-icon { display: inline-flex; color: #ed7957; }
 /* The guide capsule carries the tab chip's branch mark in the same ink. */
@@ -185,7 +231,9 @@ export const CSS = `
 .gg-row-meta { display: flex; gap: 8px; flex: 0 0 auto; max-width: 45%;
   color: var(--dsw-alias-label-secondary); font-size: inherit; }
 .gg-author { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gg-date { flex: none; font-variant-numeric: tabular-nums; }
+/* A narrow timestamp must stay within its fixed-height grid row, even when
+   the user's text size or locale makes the full date/time wider than the cell. */
+.gg-date { flex: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .gg-refs { display: inline-flex; gap: 5px; flex: 0 1 auto; max-width: min(54%, 420px); overflow: hidden; }
 .gg-ref { display: inline-flex; flex: 0 1 auto; min-width: 0; height: 20px; border-radius: 4px; line-height: 18px; white-space: nowrap; overflow: hidden; max-width: 210px; background: rgba(128,128,128,.15); border: 1px solid rgba(128,128,128,.7); }
 .gg-ref-icon { display: inline-flex; align-items: center; justify-content: center; width: 19px; flex: none; margin: -1px 0 -1px -1px; color: var(--dsw-alias-bg-base); background: var(--gg-ref-color); }

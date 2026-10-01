@@ -1,6 +1,6 @@
 {
   "name": "dsh-git-graph",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "Git history and working-tree changes in the DSH web right sidebar: a commit graph, per-commit details, and a diff view for both past commits and an agent's uncommitted work",
   "icon": "./icon.svg",

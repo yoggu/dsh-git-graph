@@ -9,7 +9,7 @@ import { diffFileIdentity, parseUnifiedPatch, planSplitRows, resolveDiffLayout }
 
 // Execute the modular source with a minimal hook runner. Pure helpers are
 // imported normally; component source is evaluated only to substitute React.
-const componentPaths = ['ui.js', 'graph-ui.js', 'diff-view.js', 'files.js', 'accordions.js', 'live.js', 'actions.js', 'dialog.js', 'graph-view.js', 'views.js']
+const componentPaths = ['ui.js', 'graph-ui.js', 'diff-view.js', 'files.js', 'accordions.js', 'live.js', 'actions.js', 'dialog.js', 'graph-view.js', 'views.js', 'repositories.js']
 const sourcePaths = [...componentPaths, 'tabs.js']
 const moduleSource = path => readFileSync(new URL(`../src/client/${path}`, import.meta.url), 'utf8')
 const cleanModule = text => text
@@ -23,6 +23,7 @@ const runtimeSource = cleanModule(componentPaths.map(path => moduleSource(path))
   // Both session-scoped memories belong to the test, so one scenario cannot
   // leak a marking or an open accordion into the next.
   .replace('const markersBySession = new Map()', '')
+  .replace('const repositorySelectionBySession = new Map()', '')
 const section = (start, end) => cleanSource.slice(cleanSource.indexOf(`function ${start}(`), cleanSource.indexOf(`function ${end}(`))
 const h = (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter(x => x != null) })
 const nodes = tree => !tree || typeof tree !== 'object' ? [] : [tree, ...[...tree.children, tree.props.first, tree.props.second].flatMap(nodes)]
@@ -52,7 +53,8 @@ class FakeEventSource {
 const formatTime = runInNewContext(`${section('formatTime', 'sessionOf')}\nformatTime`, {})
 const openAccordionBySession = new Map()
 const markersBySession = new Map()
-test.beforeEach(() => { openAccordionBySession.clear(); markersBySession.clear(); FakeEventSource.reset() })
+const repositorySelectionBySession = new Map()
+test.beforeEach(() => { openAccordionBySession.clear(); markersBySession.clear(); repositorySelectionBySession.clear(); FakeEventSource.reset() })
 
 function mount(name, initialProps, call = () => Promise.resolve({})) {
   const slots = [], effects = []
@@ -79,7 +81,7 @@ function mount(name, initialProps, call = () => Promise.resolve({})) {
     EMPTY_TREE: 'empty', DIFF_KIND: 'git-diff', COMPARE_KIND: 'git-compare', ACCORDION_H: 300,
     EVENTS_ROUTE: '/api/dsh-git-graph/events',
     ACCORDION_MIN_H: 180, ACCORDION_MAX_H: 720, ACCORDION_SPLIT: 50,
-    openAccordionBySession, accordionLayoutBySession: new Map(), markersBySession,
+    openAccordionBySession, accordionLayoutBySession: new Map(), markersBySession, repositorySelectionBySession,
     window: { innerWidth: 1200, innerHeight: 800, addEventListener() {}, removeEventListener() {} }, navigator: {},
     document: { visibilityState: 'visible', addEventListener() {}, removeEventListener() {} },
     EventSource: FakeEventSource,
@@ -380,7 +382,7 @@ test('late history response cannot overwrite newer refresh', async () => {
 })
 
 test('all tab bodies reset their child on session or workspace changes', () => {
-  const context = { h, sessionOf: props => props, GraphView() {}, CommitView() {}, DiffView() {} }
+  const context = { h, sessionOf: props => props, RepositoryGraph() {}, CommitView() {}, DiffView() {} }
   for (const [name, next] of [['GraphBody', 'CommitBody'], ['CommitBody', 'DiffBody'], ['DiffBody', 'GraphTitle']]) {
     const component = runInNewContext(`${section(name, next)}\n${name}`, context)
     const render = (sessionId, cwd) => component({ sessionId, cwd, useTabInfo: tabInfo }).children[0]
@@ -1230,4 +1232,506 @@ test('an interrupted patch application and a bisect each offer their own way out
   assert.deepEqual(operationActions({ operation: 'am' }).map(entry => entry.action),
     ['am.continue', 'am.skip', 'am.abort'])
   assert.deepEqual(operationActions({ operation: 'bisect' }).map(entry => entry.action), ['bisect.reset'])
+})
+
+test('explicit graph target scopes reads, accordion memory, and live subscription', async () => {
+  const target = { workspaceId: 'plugins', path: 'child-a' }
+  const requests = []
+  const pending = []
+  const info = tabInfo(true)
+  const ui = mount('GraphView', { sessionId: 'one', tabInfo: info, target, repositoryRoot: '/plugins/child-a', repositoryLabel: 'Plugins / child-a' }, request => {
+    requests.push(request)
+    if (request.op === 'working') return quietWorking()
+    if (request.op === 'state') return Promise.resolve({ state: idleState })
+    return Promise.resolve(page(['a']))
+  })
+  await ui.settle()
+  assert.ok(requests.every(request => request.target === target))
+  const url = new URL(FakeEventSource.instances[0].url, 'http://localhost')
+  assert.deepEqual(JSON.parse(url.searchParams.get('target')), target)
+  nodes(ui.tree).find(node => node.type?.name === 'CommitRow').props.onSelect(commit('a'))
+  await ui.settle()
+  assert.equal(openAccordionBySession.get('one:/plugins/child-a').hash, 'a')
+  assert.equal(openAccordionBySession.get('one'), undefined)
+  ui.unmount()
+  assert.ok(FakeEventSource.instances[0].closed)
+  assert.ok(pending.length === 0)
+})
+
+test('late same-file diff from another target cannot overwrite the selected repo', async () => {
+  const pending = []
+  const targetA = { workspaceId: 'plugins', path: 'a' }
+  const targetB = { workspaceId: 'plugins', path: 'b' }
+  const ui = mount('DiffPanel', { sessionId: 'one', target: targetA, signal: tabInfo().tab.signal, params: { path: 'same.txt', base: 'base', head: 'head' } }, request => {
+    const work = deferred(); pending.push({ request, ...work }); return work.promise
+  })
+  ui.update({ target: targetB })
+  assert.equal(pending[0].request.target, targetA)
+  assert.equal(pending[1].request.target, targetB)
+  pending[1].resolve({ patch: '@@ -0,0 +1 @@\n+Repository B\n' }); await ui.settle()
+  pending[0].resolve({ patch: '@@ -0,0 +1 @@\n+Repository A\n' }); await ui.settle()
+  assert.match(textOf(ui.tree), /Repository B/)
+  assert.doesNotMatch(textOf(ui.tree), /Repository A/)
+  ui.unmount()
+})
+
+test('action confirmation snapshots repository and locks selection only while executing', async () => {
+  const target = { workspaceId: 'plugins', path: 'a' }
+  const requests = [], running = []
+  const work = deferred()
+  let closed = 0
+  const ui = mount('ActionDialog', {
+    request: { action: 'commit.revert', title: 'Revert commit', params: { hash: 'a'.repeat(40) } },
+    sessionId: 'one', target, repositoryLabel: 'Plugins / a', signal: tabInfo().tab.signal,
+    onClose() { closed++ }, onDone() {}, onRunningChange(value) { running.push(value) },
+  }, request => {
+    requests.push(request)
+    return request.op === 'plan' ? Promise.resolve({ root: '/plugins/a', plan: { summary: 'git revert' }, state: idleState, warnings: [], blocked: null }) : work.promise
+  })
+  await ui.settle()
+  target.path = 'b'
+  assert.match(textOf(ui.tree), /Repository: Plugins \/ a/)
+  assert.match(textOf(ui.tree), /\/plugins\/a/)
+  assert.deepEqual(running, [])
+  find(ui.tree, node => node.type === 'form').props.onSubmit({ preventDefault() {} })
+  await ui.settle()
+  assert.deepEqual(running, [true])
+  const backdrop = find(ui.tree, node => node.props.className === 'gg-modal')
+  const element = {}
+  backdrop.props.onMouseDown({ target: element, currentTarget: element })
+  assert.equal(closed, 0)
+  assert.equal(requests.at(-1).target.path, 'a')
+  work.resolve({ output: 'done' }); await ui.settle()
+  assert.deepEqual(running, [true, false])
+  ui.unmount()
+})
+
+const pickerGroups = [
+  { id: 'other', title: 'Other', path: '/other', current: false },
+  { id: 'local', title: 'Local', path: '/local', current: true },
+]
+const pickerRegistry = (groups = pickerGroups, containing = null) => ({ groups, currentGroupId: 'local', containing })
+const pickerRepo = (workspaceId, path = '.') => ({ root: `/${workspaceId}${path === '.' ? '' : '/' + path}`, label: path, relativePath: path, target: { workspaceId, path } })
+const pickerNode = (path, repository = null) => ({ path, label: path.split('/').at(-1), repository })
+const pickerLevel = (request, repository = null, children = []) => ({ node: pickerNode(request.path ?? '.', repository), children: request.includeChildren ? children : [] })
+const pickerButton = (ui, label) => find(ui.tree, node => node.type === 'button' && node.props['aria-label'] === label)
+const pickerClick = async (ui, label) => { assert.ok(pickerButton(ui, label), label); pickerButton(ui, label).props.onClick(); ui.render(); await ui.settle() }
+const pickerGraph = ui => find(ui.tree, node => node.type?.name === 'GraphView')
+
+test('opening before metadata arrives probes only collapsed roots, current first', async () => {
+  const registry = deferred(), requests = []
+  const ui = mount('RepositoryGraph', { sessionId: 'one', tabInfo: tabInfo() }, request => {
+    requests.push(request)
+    if (request.op === 'workspaces') return registry.promise
+    assert.equal(request.op, 'repositoryLevel', 'old recursive discovery must never be requested')
+    return Promise.resolve(pickerLevel(request, pickerRepo(request.workspaceId)))
+  })
+  await pickerClick(ui, 'Select repository')
+  registry.resolve(pickerRegistry())
+  await ui.settle(); await ui.settle()
+  assert.equal(requests.filter(request => request.op === 'repositoryLevel').length, 2)
+  assert.ok(requests.filter(request => request.op === 'repositoryLevel').every(request => request.path === '.' && request.includeChildren === false))
+  const rows = nodes(ui.tree).filter(node => node.props.className === 'gg-repository-option')
+  assert.deepEqual(rows.map(node => node.props['aria-label']), ['Local', 'Other'])
+  assert.equal(pickerButton(ui, 'Expand Local').props['aria-expanded'], false)
+  assert.equal(pickerGraph(ui), undefined, 'a root probe is not an implicit selection')
+  assert.doesNotMatch(textOf(ui.tree), /Partial scan|scan notice|Root|Navigate/)
+  assert.equal(find(ui.tree, node => node.type === 'input').props.placeholder, 'Find workspaces or folders…')
+  ui.unmount()
+})
+
+test('closed picker does not probe roots; root probe concurrency is two', async () => {
+  const requests = [], pending = []
+  const groups = Array.from({ length: 5 }, (_, i) => ({ id: `w${i}`, path: `/w${i}`, title: `W${i}`, current: i === 0 }))
+  const ui = mount('RepositoryGraph', { sessionId: 'one', tabInfo: tabInfo() }, request => {
+    requests.push(request)
+    if (request.op === 'workspaces') return Promise.resolve(pickerRegistry(groups))
+    const work = deferred(); pending.push({ request, ...work }); return work.promise
+  })
+  await ui.settle()
+  assert.deepEqual(requests.map(request => request.op), ['workspaces'])
+  await pickerClick(ui, 'Select repository')
+  assert.equal(pending.length, 2)
+  pending[0].resolve(pickerLevel(pending[0].request)); await ui.settle()
+  assert.equal(pending.length, 3)
+  pending[1].resolve(pickerLevel(pending[1].request)); await ui.settle()
+  assert.equal(pending.length, 4)
+  ui.unmount()
+  pending.slice(2).forEach(work => work.resolve(pickerLevel(work.request)))
+  await ui.settle()
+  assert.equal(pending.length, 4, 'unmount stops queued probes')
+})
+
+test('expand loads one level, search never scans, collapse and reopen reuse cached levels', async () => {
+  const requests = []
+  const ui = mount('RepositoryGraph', { sessionId: 'one', tabInfo: tabInfo() }, request => {
+    requests.push(request)
+    if (request.op === 'workspaces') return Promise.resolve(pickerRegistry([pickerGroups[1]]))
+    assert.equal(request.op, 'repositoryLevel')
+    const children = request.path === '.'
+      ? [pickerNode('packages'), pickerNode('repo', pickerRepo('local', 'repo'))]
+      : [pickerNode('packages/deep', pickerRepo('local', 'packages/deep'))]
+    return Promise.resolve(pickerLevel(request, request.path === '.' ? pickerRepo('local') : null, children))
+  })
+  await ui.settle(); await pickerClick(ui, 'Select repository')
+  await pickerClick(ui, 'Expand Local')
+  assert.ok(pickerButton(ui, 'repo'))
+  assert.ok(pickerButton(ui, 'packages'))
+  assert.equal(pickerButton(ui, 'packages/deep'), undefined)
+  assert.deepEqual(requests.filter(request => request.includeChildren).map(request => request.path), ['.'])
+  await pickerClick(ui, 'Expand packages')
+  assert.ok(pickerButton(ui, 'packages/deep'))
+  const before = requests.length
+  find(ui.tree, node => node.props['aria-label'] === 'Find repositories').props.onChange({ target: { value: 'deep' } }); ui.render()
+  assert.ok(pickerButton(ui, 'Local'), 'ancestor workspace remains visible')
+  assert.ok(pickerButton(ui, 'packages'), 'ancestor path remains visible')
+  assert.equal(pickerButton(ui, 'repo'), undefined)
+  assert.equal(requests.length, before)
+  find(ui.tree, node => node.props['aria-label'] === 'Find repositories').props.onChange({ target: { value: '' } }); ui.render()
+  await pickerClick(ui, 'Collapse packages')
+  assert.equal(pickerButton(ui, 'packages/deep'), undefined)
+  await pickerClick(ui, 'Expand packages')
+  assert.equal(requests.length, before)
+  await pickerClick(ui, 'Collapse Local'); await pickerClick(ui, 'Expand Local')
+  assert.equal(requests.length, before)
+  await pickerClick(ui, 'Select repository'); await pickerClick(ui, 'Select repository')
+  assert.equal(requests.length, before, 'popup reuse does not re-probe roots')
+  await pickerClick(ui, 'packages/deep')
+  assert.equal(pickerGraph(ui).props.target.path, 'packages/deep')
+  assert.match(pickerGraph(ui).props.key, /packages\/deep/)
+  ui.unmount()
+})
+
+test('nongit row activates expansion and sole immediate repository is never auto-selected', async () => {
+  const ui = mount('RepositoryGraph', { sessionId: 'one', tabInfo: tabInfo() }, request => Promise.resolve(request.op === 'workspaces'
+    ? pickerRegistry([pickerGroups[1]])
+    : pickerLevel(request, null, [pickerNode('only', pickerRepo('local', 'only'))])))
+  await ui.settle(); await pickerClick(ui, 'Select repository'); await pickerClick(ui, 'Local')
+  assert.equal(pickerButton(ui, 'Collapse Local').props['aria-expanded'], true)
+  assert.ok(pickerButton(ui, 'only'))
+  assert.equal(pickerGraph(ui), undefined)
+  assert.equal(find(ui.tree, node => node.props.className === 'gg-repository-tree-row is-selected'), undefined, 'nongit folders are never selected when both targets are absent')
+  assert.equal(find(ui.tree, node => node.type?.name === 'PickerSymbol' && node.props.kind === 'check'), undefined, 'no check marks without a repository selection')
+  await pickerClick(ui, 'only')
+  assert.equal(pickerGraph(ui).props.target.path, 'only')
+  await pickerClick(ui, 'Select repository')
+  assert.equal(pickerButton(ui, 'Local').props['aria-pressed'], undefined, 'ancestor folder is not a repository selection')
+  assert.equal(pickerButton(ui, 'only').props['aria-pressed'], true)
+  assert.equal(nodes(ui.tree).filter(node => node.props.className === 'gg-repository-tree-row is-selected').length, 1)
+  ui.unmount()
+})
+
+test('containing selection is immediate, remembered target validates exactly without scans', async () => {
+  const entry = pickerRepo('local', 'packages/deep'), requests = []
+  const respond = request => { requests.push(request); return Promise.resolve(request.op === 'workspaces' ? pickerRegistry(pickerGroups, entry) : { root: entry.root }) }
+  const first = mount('RepositoryGraph', { sessionId: 'one', tabInfo: tabInfo() }, respond)
+  await first.settle()
+  assert.equal(pickerGraph(first).props.target.path, 'packages/deep')
+  assert.deepEqual(requests.map(request => request.op), ['workspaces'])
+  first.unmount()
+  const restored = mount('RepositoryGraph', { sessionId: 'one', tabInfo: tabInfo() }, respond)
+  await restored.settle()
+  assert.deepEqual(requests.map(request => request.op), ['workspaces', 'workspaces', 'state'])
+  assert.equal(requests.at(-1).target.path, 'packages/deep')
+  assert.equal(pickerGraph(restored).props.repositoryRoot, entry.root)
+  restored.unmount()
+})
+
+test('containing selection highlights its current scope while registered aliases highlight only exact targets', async () => {
+  const containing = { ...pickerRepo('local'), target: { session: true, containing: true } }
+  const ui = mount('RepositoryGraph', { sessionId: 'one', tabInfo: tabInfo() }, request => {
+    if (request.op === 'workspaces') return Promise.resolve(pickerRegistry(pickerGroups, containing))
+    const entry = { ...pickerRepo(request.workspaceId), root: containing.root }
+    return Promise.resolve(pickerLevel(request, entry))
+  })
+  await ui.settle(); await pickerClick(ui, 'Select repository')
+  assert.equal(pickerButton(ui, 'Local').props['aria-pressed'], true, 'containing target matches its probed root by root and current scope')
+  assert.equal(pickerButton(ui, 'Other').props['aria-pressed'], false, 'same canonical root in another scope is not highlighted')
+  assert.equal(nodes(ui.tree).filter(node => node.type?.name === 'PickerSymbol' && node.props.kind === 'check').length, 1)
+  await pickerClick(ui, 'Other'); await pickerClick(ui, 'Select repository')
+  assert.equal(pickerButton(ui, 'Local').props['aria-pressed'], false, 'registered choice keeps exact target highlighting')
+  assert.equal(pickerButton(ui, 'Other').props['aria-pressed'], true)
+  assert.equal(nodes(ui.tree).filter(node => node.type?.name === 'PickerSymbol' && node.props.kind === 'check').length, 1)
+  ui.unmount()
+})
+
+test('slow remembered validation or late failure never overrides explicit selection', async () => {
+  const remembered = pickerRepo('local', 'old'), validation = deferred()
+  repositorySelectionBySession.set('one', { ...remembered, groupId: 'local' })
+  const ui = mount('RepositoryGraph', { sessionId: 'one', tabInfo: tabInfo() }, request => {
+    if (request.op === 'workspaces') return Promise.resolve(pickerRegistry())
+    if (request.op === 'state') return validation.promise
+    return Promise.resolve(pickerLevel(request, pickerRepo(request.workspaceId)))
+  })
+  await ui.settle(); await pickerClick(ui, 'Select repository'); await pickerClick(ui, 'Other')
+  assert.equal(pickerGraph(ui).props.target.workspaceId, 'other')
+  validation.reject(new Error('old vanished')); await ui.settle()
+  assert.equal(pickerGraph(ui).props.target.workspaceId, 'other')
+  assert.equal(find(ui.tree, node => node.props.role === 'alert'), undefined)
+  ui.unmount()
+})
+
+test('Rescan refreshes registry, roots and visible expanded levels only, pruning removed groups', async () => {
+  let groups = pickerGroups, requests = []
+  const ui = mount('RepositoryGraph', { sessionId: 'one', tabInfo: tabInfo() }, request => {
+    requests.push(request)
+    if (request.op === 'workspaces') return Promise.resolve(pickerRegistry(groups))
+    return Promise.resolve(pickerLevel(request, null, request.path === '.' ? [pickerNode('packages'), pickerNode('collapsed')] : [pickerNode(`${request.path}/deep`)]))
+  })
+  await ui.settle(); await pickerClick(ui, 'Select repository'); await pickerClick(ui, 'Expand Local')
+  await pickerClick(ui, 'Expand packages'); await pickerClick(ui, 'Expand collapsed'); await pickerClick(ui, 'Collapse collapsed')
+  groups = [pickerGroups[1], { id: 'new', title: 'New workspace', path: '/new', current: false }]
+  requests = []
+  await pickerClick(ui, 'Rescan'); await ui.settle()
+  assert.equal(requests.filter(request => request.op === 'workspaces').length, 1)
+  assert.deepEqual(requests.filter(request => request.op === 'repositoryLevel').map(request => [request.workspaceId, request.path, request.includeChildren, request.refresh]), [
+    ['local', '.', true, true], ['new', '.', false, true], ['local', 'packages', true, true],
+  ])
+  assert.doesNotMatch(textOf(ui.tree), /Other/)
+  assert.ok(pickerButton(ui, 'New workspace'))
+  assert.equal(pickerButton(ui, 'collapsed/deep'), undefined)
+  ui.unmount()
+})
+
+test('Rescan invalidates removed selection without silently selecting another repo', async () => {
+  const saved = pickerRepo('other'), requests = []
+  let groups = pickerGroups
+  repositorySelectionBySession.set('one', { ...saved, groupId: 'other' })
+  const ui = mount('RepositoryGraph', { sessionId: 'one', tabInfo: tabInfo() }, request => {
+    requests.push(request)
+    return Promise.resolve(request.op === 'workspaces' ? pickerRegistry(groups) : request.op === 'state' ? { root: saved.root } : pickerLevel(request, pickerRepo(request.workspaceId)))
+  })
+  await ui.settle(); await pickerClick(ui, 'Select repository')
+  assert.ok(pickerGraph(ui))
+  groups = [pickerGroups[1]]
+  await pickerClick(ui, 'Rescan'); await ui.settle()
+  assert.equal(pickerGraph(ui), undefined)
+  assert.match(textOf(ui.tree), /selected repository is unavailable/)
+  assert.equal(requests.filter(request => request.op === 'state').length, 1, 'removed scope is not validated against another folder')
+  ui.unmount()
+})
+
+test('node failure has local retry, no warning notices, and retries only the requested level', async () => {
+  let failed = false
+  const requests = []
+  const ui = mount('RepositoryGraph', { sessionId: 'one', tabInfo: tabInfo() }, request => {
+    requests.push(request)
+    if (request.op === 'workspaces') return Promise.resolve(pickerRegistry([pickerGroups[1]]))
+    if (request.includeChildren && !failed) { failed = true; return Promise.reject(new Error('Access denied')) }
+    return Promise.resolve({ ...pickerLevel(request, null, [pickerNode('child')]), warnings: ['old warning'], truncated: true })
+  })
+  await ui.settle(); await pickerClick(ui, 'Select repository'); await pickerClick(ui, 'Expand Local')
+  assert.match(textOf(ui.tree), /Access denied/)
+  assert.doesNotMatch(textOf(ui.tree), /old warning|Partial scan|notice/)
+  await pickerClick(ui, 'Retry Local')
+  assert.equal(requests.at(-1).path, '.')
+  assert.equal(requests.at(-1).includeChildren, true)
+  assert.equal(requests.at(-1).refresh, true)
+  assert.ok(pickerButton(ui, 'child'))
+  assert.equal(find(ui.tree, node => node.props.role === 'alert'), undefined)
+  ui.unmount()
+})
+
+test('action lock blocks stale picker callbacks, and releasing it preserves exact targets', async () => {
+  const entry = pickerRepo('local'), requests = []
+  const ui = mount('RepositoryGraph', { sessionId: 'one', tabInfo: tabInfo() }, request => {
+    requests.push(request)
+    return Promise.resolve(request.op === 'workspaces' ? pickerRegistry(pickerGroups, entry) : pickerLevel(request, pickerRepo(request.workspaceId)))
+  })
+  await ui.settle(); await pickerClick(ui, 'Select repository')
+  const choose = pickerButton(ui, 'Other').props.onClick
+  const expand = pickerButton(ui, 'Expand Other').props.onClick
+  const rescan = pickerButton(ui, 'Rescan').props.onClick
+  pickerGraph(ui).props.onRunningChange(true)
+  choose(); expand(); rescan(); ui.render()
+  assert.equal(pickerGraph(ui).props.target.workspaceId, 'local')
+  assert.equal(pickerButton(ui, 'Select repository').props.disabled, true)
+  assert.equal(requests.length, 3)
+  pickerGraph(ui).props.onRunningChange(false); ui.render()
+  await pickerClick(ui, 'Other')
+  assert.equal(pickerGraph(ui).props.target.workspaceId, 'other')
+  ui.unmount()
+})
+
+test('ArrowRight and ArrowLeft expand and collapse; Escape closes and restores focus', async () => {
+  const requests = []
+  const ui = mount('RepositoryGraph', { sessionId: 'one', tabInfo: tabInfo() }, request => {
+    requests.push(request)
+    return Promise.resolve(request.op === 'workspaces' ? pickerRegistry([pickerGroups[1]]) : pickerLevel(request, null, [pickerNode('child')]))
+  })
+  await ui.settle(); await pickerClick(ui, 'Select repository')
+  let prevented = 0
+  const key = name => ({ key: name, preventDefault() { prevented++ }, stopPropagation() {} })
+  find(ui.tree, node => node.props.className?.startsWith('gg-repository-tree-row')).props.onKeyDown(key('ArrowRight'))
+  await ui.settle()
+  assert.ok(pickerButton(ui, 'child'))
+  const count = requests.length
+  find(ui.tree, node => node.props.className?.startsWith('gg-repository-tree-row')).props.onKeyDown(key('ArrowLeft'))
+  ui.render()
+  assert.equal(pickerButton(ui, 'child'), undefined)
+  assert.equal(requests.length, count)
+  let focused = 0
+  pickerButton(ui, 'Select repository').props.ref.current = { focus() { focused++ } }
+  find(ui.tree, node => node.props.className === 'gg-repository-picker').props.onKeyDown(key('Escape'))
+  ui.render()
+  assert.equal(find(ui.tree, node => node.props.role === 'dialog'), undefined)
+  assert.equal(focused, 1)
+  assert.equal(prevented, 3)
+  ui.unmount()
+})
+
+test('tab abort and session change ignore late tree replies and do not leak old nodes', async () => {
+  const pending = [], controller = new AbortController()
+  const ui = mount('RepositoryGraph', { sessionId: 'one', tabInfo: { tab: { signal: controller.signal } } }, (request, signal) => {
+    if (request.op === 'workspaces') return Promise.resolve(pickerRegistry([pickerGroups[1]]))
+    const work = deferred(); pending.push({ request, signal, ...work }); return work.promise
+  })
+  await ui.settle(); await pickerClick(ui, 'Select repository')
+  ui.update({ sessionId: 'two', tabInfo: tabInfo() }); await ui.settle(); await pickerClick(ui, 'Select repository')
+  assert.equal(pending[0].signal.aborted, true)
+  pending[1].resolve(pickerLevel(pending[1].request, pickerRepo('local'))); await ui.settle()
+  pending[0].resolve(pickerLevel(pending[0].request, pickerRepo('old'))); await ui.settle()
+  assert.equal(pickerButton(ui, 'Local').props.title, '/local')
+  ui.unmount()
+  assert.equal(pending[1].signal.aborted, true)
+  const late = deferred()
+  const aborted = mount('RepositoryGraph', { sessionId: 'three', tabInfo: { tab: { signal: controller.signal } } }, () => late.promise)
+  controller.abort()
+  late.resolve(pickerRegistry(pickerGroups, pickerRepo('local'))); await aborted.settle()
+  assert.equal(pickerGraph(aborted), undefined)
+  aborted.unmount()
+})
+
+test('late root-only response cannot erase expanded children, and late branch load stays collapsed', async () => {
+  const pending = []
+  const ui = mount('RepositoryGraph', { sessionId: 'one', tabInfo: tabInfo() }, request => {
+    if (request.op === 'workspaces') return Promise.resolve(pickerRegistry([pickerGroups[1]]))
+    const work = deferred(); pending.push({ request, ...work }); return work.promise
+  })
+  await ui.settle(); await pickerClick(ui, 'Select repository'); await pickerClick(ui, 'Expand Local')
+  assert.deepEqual(pending.map(work => work.request.includeChildren), [false, true])
+  pending[1].resolve(pickerLevel(pending[1].request, null, [pickerNode('packages')]))
+  await ui.settle()
+  assert.ok(pickerButton(ui, 'packages'))
+  pending[0].resolve(pickerLevel(pending[0].request, pickerRepo('old')))
+  await ui.settle()
+  assert.ok(pickerButton(ui, 'packages'), 'superseded root reply never replaces children')
+  assert.equal(pickerButton(ui, 'Local').props.title, '/local')
+  await pickerClick(ui, 'Expand packages'); await pickerClick(ui, 'Collapse packages')
+  pending[2].resolve(pickerLevel(pending[2].request, null, [pickerNode('packages/deep')]))
+  await ui.settle()
+  assert.equal(pickerButton(ui, 'packages/deep'), undefined)
+  assert.equal(pickerButton(ui, 'Expand packages').props['aria-expanded'], false)
+  const count = pending.length
+  await pickerClick(ui, 'Expand packages')
+  assert.ok(pickerButton(ui, 'packages/deep'))
+  assert.equal(pending.length, count, 'late successful response is cached without reopening')
+  ui.unmount()
+})
+
+test('refresh supersedes stale levels and removed descendants lose their expansion cache', async () => {
+  let remove = false
+  const pending = deferred(), requests = []
+  const ui = mount('RepositoryGraph', { sessionId: 'one', tabInfo: tabInfo() }, request => {
+    requests.push(request)
+    if (request.op === 'workspaces') return Promise.resolve(pickerRegistry([pickerGroups[1]]))
+    if (request.path === 'packages' && !request.refresh) return pending.promise
+    return Promise.resolve(pickerLevel(request, null, remove ? [] : [pickerNode(request.path === '.' ? 'packages' : 'packages/deep')]))
+  })
+  await ui.settle(); await pickerClick(ui, 'Select repository'); await pickerClick(ui, 'Expand Local'); await pickerClick(ui, 'Expand packages')
+  remove = true
+  // Invoke the handler while a load is in flight to exercise the epoch even
+  // though the normal UI disables refresh until that read finishes.
+  pickerButton(ui, 'Rescan').props.onClick(); ui.render(); await ui.settle(); await ui.settle()
+  assert.equal(pickerButton(ui, 'packages'), undefined)
+  pending.resolve({ node: pickerNode('packages'), children: [pickerNode('packages/stale')] }); await ui.settle()
+  assert.equal(pickerButton(ui, 'packages/stale'), undefined)
+  remove = false
+  await pickerClick(ui, 'Rescan'); await ui.settle()
+  assert.ok(pickerButton(ui, 'Expand packages'), 'removed node does not retain expanded state when it returns')
+  assert.equal(requests.filter(request => request.path === 'packages').length, 1, 'refresh never descends into removed nodes')
+  ui.unmount()
+})
+
+test('late rescan error cannot supersede a newer explicit selection', async () => {
+  const registry = deferred()
+  let registries = 0
+  const ui = mount('RepositoryGraph', { sessionId: 'one', tabInfo: tabInfo() }, request => {
+    if (request.op === 'workspaces') return ++registries === 1 ? Promise.resolve(pickerRegistry()) : registry.promise
+    return Promise.resolve(pickerLevel(request, pickerRepo(request.workspaceId)))
+  })
+  await ui.settle(); await pickerClick(ui, 'Select repository'); await pickerClick(ui, 'Rescan')
+  await pickerClick(ui, 'Other')
+  registry.reject(new Error('Registry unavailable')); await ui.settle()
+  assert.equal(pickerGraph(ui).props.target.workspaceId, 'other')
+  assert.equal(find(ui.tree, node => node.props.role === 'alert'), undefined)
+  ui.unmount()
+})
+
+test('delayed initial registry cannot replace newer rescan registry or strand loading', async () => {
+  const initial = deferred()
+  let count = 0
+  const ui = mount('RepositoryGraph', { sessionId: 'one', tabInfo: tabInfo() }, request => {
+    if (request.op === 'workspaces') return ++count === 1 ? initial.promise : Promise.resolve(pickerRegistry([pickerGroups[1]]))
+    return Promise.resolve(pickerLevel(request, pickerRepo(request.workspaceId)))
+  })
+  await pickerClick(ui, 'Select repository'); await pickerClick(ui, 'Rescan'); await ui.settle()
+  assert.ok(pickerButton(ui, 'Local'))
+  assert.equal(pickerButton(ui, 'Other'), undefined)
+  assert.match(textOf(ui.tree), /Choose a repository/)
+  initial.resolve(pickerRegistry(pickerGroups, pickerRepo('other'))); await ui.settle()
+  assert.equal(pickerButton(ui, 'Other'), undefined)
+  assert.equal(pickerGraph(ui), undefined, 'superseded containing repository is not selected')
+  assert.doesNotMatch(textOf(ui.tree), /Loading workspaces/)
+  assert.equal(nodes(ui.tree).filter(node => node.props['data-repository-option']).length, 1, 'only main row participates in vertical navigation')
+  assert.equal(pickerButton(ui, 'Expand Local').props['data-repository-option'], undefined)
+  ui.unmount()
+})
+
+test('rescan supersedes pending remembered restoration when its workspace is removed', async () => {
+  const validation = deferred(), saved = pickerRepo('other')
+  let groups = pickerGroups
+  repositorySelectionBySession.set('one', { ...saved, groupId: 'other' })
+  const ui = mount('RepositoryGraph', { sessionId: 'one', tabInfo: tabInfo() }, request => {
+    if (request.op === 'workspaces') return Promise.resolve(pickerRegistry(groups))
+    if (request.op === 'state') return validation.promise
+    return Promise.resolve(pickerLevel(request, pickerRepo(request.workspaceId)))
+  })
+  await ui.settle(); await pickerClick(ui, 'Select repository')
+  groups = [pickerGroups[1]]
+  await pickerClick(ui, 'Rescan'); await ui.settle()
+  validation.resolve({ root: saved.root }); await ui.settle()
+  assert.equal(pickerGraph(ui), undefined, 'late validation cannot restore a removed scope')
+  assert.equal(pickerButton(ui, 'Other'), undefined)
+  ui.unmount()
+})
+
+test('a rescan started before writing cannot unmount the executing repository', async () => {
+  const entry = pickerRepo('local'), registry = deferred()
+  let count = 0
+  const ui = mount('RepositoryGraph', { sessionId: 'one', tabInfo: tabInfo() }, request => {
+    if (request.op === 'workspaces') return ++count === 1 ? Promise.resolve(pickerRegistry(pickerGroups, entry)) : registry.promise
+    return Promise.resolve(pickerLevel(request, pickerRepo(request.workspaceId)))
+  })
+  await ui.settle(); await pickerClick(ui, 'Select repository'); await pickerClick(ui, 'Rescan')
+  pickerGraph(ui).props.onRunningChange(true); ui.render()
+  registry.resolve(pickerRegistry([pickerGroups[0]])); await ui.settle(); await ui.settle()
+  assert.equal(pickerGraph(ui).props.repositoryRoot, entry.root, 'action keeps its exact graph mounted')
+  pickerGraph(ui).props.onRunningChange(false); ui.render()
+  ui.unmount()
+})
+
+test('synthetic cwd levels omit workspaceId and root selection keeps the returned target', async () => {
+  const requests = [], entry = { ...pickerRepo('cwd'), target: { session: true, path: '.' } }
+  const ui = mount('RepositoryGraph', { sessionId: 'one', tabInfo: tabInfo() }, request => {
+    requests.push(request)
+    return Promise.resolve(request.op === 'workspaces'
+      ? pickerRegistry([{ id: 'session', title: 'Current session', path: '/cwd', current: true, session: true }])
+      : pickerLevel(request, entry))
+  })
+  await ui.settle(); await pickerClick(ui, 'Select repository'); await pickerClick(ui, 'Expand Current session')
+  assert.ok(requests.filter(request => request.op === 'repositoryLevel').every(request => !('workspaceId' in request)))
+  await pickerClick(ui, 'Current session')
+  assert.deepEqual({ ...pickerGraph(ui).props.target }, { session: true, path: '.' })
+  ui.unmount()
 })

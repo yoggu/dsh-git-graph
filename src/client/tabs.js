@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { COMMIT_ID, COMMIT_KIND, COMPARE_ID, COMPARE_KIND, DIFF_ID, DIFF_KIND, ID, KIND } from './constants.js'
-import { GraphView } from './graph-view.js'
+import { RepositoryGraph } from './repositories.js'
 import { CommitView, CompareView, DiffView } from './views.js'
 import { GitIcon, GuideGlyph } from './ui.js'
 
@@ -30,7 +30,7 @@ export function GraphBody(props) {
   if (cwd === undefined || cwd === null) {
     return h('div', { className: 'gg-empty' }, 'This session has no workspace directory yet.')
   }
-  return h('div', { className: 'gg-host' }, h(GraphView, { key: `${sessionId}:${cwd}`, tabInfo, sessionId }))
+  return h('div', { className: 'gg-host' }, h(RepositoryGraph, { key: `${sessionId}:${cwd}`, tabInfo, sessionId }))
 }
 
 /**
@@ -134,7 +134,7 @@ export const definitions = [
     guide: [{
       order: 20,
       title: () => 'Git graph',
-      description: () => 'Commit history and uncommitted changes of this session’s workspace',
+      description: () => 'Browse Git repositories across your DSH workspaces',
       icon: GuideGlyph,
     }],
   },
